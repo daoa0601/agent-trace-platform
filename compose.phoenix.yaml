@@ -1,0 +1,27 @@
+services:
+  phoenix:
+    image: arizephoenix/phoenix:version-17.5.0
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+      PHOENIX_DEFAULT_RETENTION_POLICY_DAYS: "30"
+      PHOENIX_ALLOW_EXTERNAL_RESOURCES: "false"
+    volumes:
+      - phoenix-data:/mnt/data
+    ports:
+      - "${PHOENIX_PORT:-6006}:6006"
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  otel-collector:
+    command:
+      - --config=/etc/otelcol-contrib/config.yaml
+      - --config=/etc/otelcol-contrib/phoenix.yaml
+    volumes:
+      - ./infra/otel-collector-phoenix.yaml:/etc/otelcol-contrib/phoenix.yaml:ro
+    depends_on:
+      phoenix:
+        condition: service_started
+
+volumes:
+  phoenix-data:

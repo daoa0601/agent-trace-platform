@@ -1,0 +1,55 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Events / second",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(rate(agenttrace_ingested_events_total[5m]))", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Collector ready",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+      "targets": [{"expr": "agenttrace_collector_ready", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Raw write latency (p95)",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(agenttrace_raw_write_seconds_bucket[5m])))", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Redactions",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 8},
+      "targets": [{"expr": "sum by (category) (rate(agenttrace_redactions_total[5m]))", "legendFormat": "{{category}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Duplicate event rate",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 8},
+      "targets": [{"expr": "sum(rate(agenttrace_duplicate_events_total[5m]))", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Agent operations / second",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 17},
+      "targets": [{"expr": "sum by (openinference_span_kind) (rate(agenttrace_span_calls_total[5m]))", "legendFormat": "{{openinference_span_kind}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Agent operation latency (p95)",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 17},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, agenttrace_step_type) (rate(agenttrace_span_duration_milliseconds_bucket[5m])))", "legendFormat": "{{agenttrace_step_type}}", "refId": "A"}]
+    }
+  ],
+  "schemaVersion": 41,
+  "tags": ["agenttrace"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "title": "AgentTrace Collector",
+  "uid": "agenttrace-collector",
+  "version": 1
+}

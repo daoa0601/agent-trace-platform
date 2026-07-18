@@ -1,0 +1,1 @@
+{"sample_id":"unsafe-yaml-load","input":{"language":"python","diff":"- config = yaml.safe_load(text)\n+ config = yaml.load(text, Loader=yaml.Loader)"},"target":"unsafe YAML deserialization","metadata":{"split":"smoke"}}

@@ -1,0 +1,92 @@
+[build-system]
+requires = ["uv_build>=0.9.5,<0.10.0"]
+build-backend = "uv_build"
+
+[project]
+name = "agenttrace-platform"
+version = "0.1.0"
+description = "A production-oriented trace lake and evaluation pipeline for general-purpose agents"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Anh Dao" }]
+dependencies = [
+  "benchmark-audit-core>=0.1,<0.2",
+  "boto3>=1.35,<2",
+  "duckdb>=1.2,<2",
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "jsonschema>=4.23,<5",
+  "opentelemetry-api>=1.30,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.30,<2",
+  "opentelemetry-proto>=1.30,<2",
+  "opentelemetry-sdk>=1.30,<2",
+  "prometheus-client>=0.21,<1",
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.7,<3",
+  "pyarrow>=18,<23",
+  "pyyaml>=6.0,<7",
+  "typer>=0.15,<1",
+  "uvicorn[standard]>=0.34,<1",
+  "zstandard>=0.23,<1",
+]
+
+[tool.uv.sources]
+benchmark-audit-core = { path = "../benchmark-audit-core", editable = true }
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary,pool]>=3.2,<4"]
+inspect = [
+  "inspect-ai>=0.3.159,<1",
+  "openai>=1.75,<3",
+]
+dev = [
+  "basedpyright>=1.28,<2",
+  "pre-commit>=4.1,<5",
+  "pytest>=8.3,<10",
+  "pytest-cov>=6,<8",
+  "ruff>=0.11,<1",
+]
+
+[project.scripts]
+agenttrace = "agenttrace.cli:app"
+
+[tool.uv.build-backend]
+module-name = "agenttrace"
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["data", "outputs"]
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "N", "UP"]
+ignore = ["B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agenttrace", "benchmark_audit_core"]
+
+[tool.basedpyright]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+include = ["src", "tests"]
+exclude = ["data", "outputs"]
+venvPath = "."
+venv = ".venv"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+
+[tool.coverage.run]
+branch = true
+source = ["agenttrace"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 80

@@ -1,0 +1,50 @@
+schema_version: 1.0.0
+task_id: documents.invoice-extraction
+version: 1.0.0
+title: Extract invoice fields
+description: Extract normalized fields from invoice text without relying on a coding harness.
+domain: document-understanding
+tags: [extraction, structured-output]
+input_schema:
+  type: object
+  required: [document_text]
+  properties:
+    document_text:
+      type: string
+expected_output_schema:
+  type: object
+  additionalProperties: false
+  required: [invoice_number, currency, total]
+  properties:
+    invoice_number:
+      type: string
+    currency:
+      type: string
+      pattern: "^[A-Z]{3}$"
+    total:
+      type: number
+      minimum: 0
+environment:
+  kind: none
+  network: none
+evaluators:
+  - evaluator_id: output-schema
+    kind: json_schema
+    version: 1.0.0
+    weight: 1.0
+  - evaluator_id: required-currency
+    kind: regex
+    version: 1.0.0
+    required: false
+    weight: 0.25
+    config:
+      pattern: '"currency"\s*:\s*"[A-Z]{3}"'
+data_policy:
+  privacy_level: confidential
+  retain_raw_days: 14
+  retain_canonical_days: 180
+  allow_training: false
+  allow_private_reasoning: false
+  redaction_mode: strict
+metadata:
+  owner: document-ai

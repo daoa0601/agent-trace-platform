@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: agenttrace-collector
+    metrics_path: /metrics
+    static_configs:
+      - targets: [collector:8000]
+  - job_name: otel-collector
+    static_configs:
+      - targets: [otel-collector:8888]
+  - job_name: agenttrace-spanmetrics
+    static_configs:
+      - targets: [otel-collector:8890]

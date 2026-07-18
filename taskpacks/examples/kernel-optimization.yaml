@@ -1,0 +1,94 @@
+schema_version: 1.0.0
+task_id: systems.kernel-optimization
+version: 1.0.0
+title: Optimize one accelerator kernel under an auditable protocol
+description: >-
+  Produce a correct optimized kernel through a live compile, check, and benchmark loop on one
+  accelerator. The agent chooses when it is finished; a watchdog is only a safety boundary.
+domain: systems-performance
+tags: [kernel, accelerator, autonomous-agent, audited-benchmark]
+split: example
+input_schema:
+  type: object
+  required: [problem, reference_implementation, benchmark_protocol]
+  properties:
+    problem:
+      type: string
+    reference_implementation:
+      type: string
+    benchmark_protocol:
+      type: string
+expected_output_schema:
+  type: object
+  required: [artifact_uri, artifact_sha256, metric_name, metric_value]
+  properties:
+    artifact_uri:
+      type: string
+    artifact_sha256:
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+    metric_name:
+      type: string
+    metric_value:
+      type: number
+environment:
+  kind: remote
+  network: none
+  state_capture: full
+  resources:
+    cpu: 8
+    memory_mb: 32768
+    disk_mb: 32768
+    gpu_count: 1
+    timeout_seconds: 86400
+evaluators:
+  - evaluator_id: kernel-correctness
+    kind: custom
+    version: 1.0.0
+    required: true
+    config:
+      contract: task-specific hidden correctness suite
+  - evaluator_id: benchmark-protocol
+    kind: custom
+    version: 1.0.0
+    required: true
+    config:
+      contract: task-specific timing and resource-isolation checks
+session_policy:
+  one_task_per_session: true
+  termination_policy: agent_decides
+  watchdog_seconds: 86400
+  max_turns: null
+  live_hardware: true
+  required_stages: [compile, check, benchmark]
+  minimum_benchmark_repetitions: 10
+audit_policy:
+  require_clean_source: true
+  require_agent_decided_stop: true
+  require_independent_reviewer: true
+  require_manual_review: true
+  require_final_artifact_review: true
+  require_full_trace_review: true
+  require_task_definition_review: true
+  require_benchmark_protocol_review: true
+  required_retests:
+    - fresh_process
+    - cold_cache
+    - input_perturbation
+    - execution_order
+    - hidden_checks
+    - repeated_measurement
+    - output_validation
+    - timing_sanity
+    - resource_isolation
+  blocking_severities: [critical, high]
+data_policy:
+  privacy_level: internal
+  retain_raw_days: 90
+  retain_canonical_days: 730
+  allow_training: true
+  allow_private_reasoning: false
+  redaction_mode: strict
+metadata:
+  owner: agent-platform
+  note: Hardware identity is supplied per run in the auditable-session manifest, not in this task.

@@ -1,0 +1,35 @@
+schema_version: 1.0.0
+task_id: code.security-review
+version: 1.0.0
+title: Review a security-sensitive code change
+description: Identify the primary security problem in the supplied patch in one concise sentence.
+domain: software-engineering
+tags: [coding, security-review]
+split: smoke
+input_schema:
+  type: object
+  required: [language, diff]
+  properties:
+    language:
+      type: string
+    diff:
+      type: string
+reference: unsafe YAML deserialization
+environment:
+  kind: none
+  network: none
+evaluators:
+  - evaluator_id: security-finding
+    kind: contains
+    version: 1.0.0
+    config:
+      values: [unsafe, YAML, deserialization]
+data_policy:
+  privacy_level: internal
+  retain_raw_days: 30
+  retain_canonical_days: 365
+  allow_training: true
+  allow_private_reasoning: false
+  redaction_mode: balanced
+metadata:
+  owner: agent-platform

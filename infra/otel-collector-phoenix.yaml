@@ -1,0 +1,22 @@
+exporters:
+  otlphttp/phoenix:
+    endpoint: http://phoenix:6006
+    headers:
+      x-project-name: agenttrace-local
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 10s
+      max_elapsed_time: 120s
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      queue_size: 1024
+      storage: file_storage
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/agenttrace, spanmetrics, otlphttp/phoenix]

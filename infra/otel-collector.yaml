@@ -1,0 +1,95 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  file_storage:
+    directory: /var/lib/otelcol
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 384
+    spike_limit_mib: 96
+  batch:
+    send_batch_size: 512
+    timeout: 2s
+  resource/drop_metric_instances:
+    # Python's OTel SDK creates a new service.instance.id per benchmark process. It remains on
+    # traces, but must not become an exported_instance label on aggregated RED metrics.
+    attributes:
+      - key: service.instance.id
+        action: delete
+
+connectors:
+  spanmetrics:
+    namespace: agenttrace.span
+    # One dedicated connector/Prometheus writer runs here, so a per-process UUID is unnecessary
+    # cardinality. Keep the resource grouping key stable across benchmark processes.
+    exclude_dimensions: [collector.instance.id]
+    resource_metrics_key_attributes:
+      - service.name
+      - deployment.environment.name
+      - telemetry.sdk.language
+    histogram:
+      unit: ms
+      explicit:
+        buckets: [10ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s, 30s, 60s]
+    dimensions:
+      - name: openinference.span.kind
+      - name: agenttrace.step.type
+      - name: gen_ai.provider.name
+      - name: gen_ai.request.model
+    exemplars:
+      enabled: true
+    aggregation_cardinality_limit: 5000
+
+exporters:
+  otlphttp/agenttrace:
+    endpoint: http://collector:8000/v1/otlp
+    encoding: proto
+    compression: none
+    headers:
+      X-AgentTrace-Key: ${env:AGENTTRACE_API_KEY}
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 10s
+      max_elapsed_time: 120s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 2048
+      storage: file_storage
+  prometheus/spanmetrics:
+    endpoint: 0.0.0.0:8890
+    resource_to_telemetry_conversion:
+      # The connector already emits the allowlisted dimensions above. Promoting every resource
+      # attribute would turn process/host instance IDs into unbounded Prometheus labels.
+      enabled: false
+
+service:
+  extensions: [health_check, file_storage]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/agenttrace, spanmetrics]
+    metrics/spanmetrics:
+      receivers: [spanmetrics]
+      processors: [resource/drop_metric_instances]
+      exporters: [prometheus/spanmetrics]
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888

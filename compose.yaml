@@ -1,0 +1,177 @@
+name: agenttrace
+
+services:
+  collector:
+    build:
+      context: .
+      dockerfile: services/collector/Dockerfile
+    environment:
+      AGENTTRACE_ENVIRONMENT: development
+      AGENTTRACE_API_KEYS: ${AGENTTRACE_API_KEY:-local-development-key}
+      AGENTTRACE_STORAGE_BACKEND: s3
+      AGENTTRACE_S3_BUCKET: agent-traces
+      AGENTTRACE_S3_ENDPOINT_URL: http://minio:9000
+      AGENTTRACE_S3_REGION: us-east-1
+      AGENTTRACE_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-agenttrace}
+      AGENTTRACE_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-agenttrace-local-only}
+      AGENTTRACE_REDACTION_MODE: balanced
+    ports:
+      - "${AGENTTRACE_HTTP_PORT:-8000}:8000"
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.128.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      AGENTTRACE_API_KEY: ${AGENTTRACE_API_KEY:-local-development-key}
+    volumes:
+      - ./infra/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - otel-data:/var/lib/otelcol
+    ports:
+      - "${OTEL_GRPC_PORT:-4317}:4317"
+      - "${OTEL_HTTP_PORT:-4318}:4318"
+      - "${OTEL_HEALTH_PORT:-13133}:13133"
+    depends_on:
+      collector:
+        condition: service_healthy
+      otel-storage-init:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    restart: unless-stopped
+
+  otel-storage-init:
+    image: busybox:1.37.0
+    command: ["sh", "-c", "chown -R 10001:10001 /var/lib/otelcol"]
+    user: "0:0"
+    volumes:
+      - otel-data:/var/lib/otelcol
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt:
+      - no-new-privileges:true
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-agenttrace}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-agenttrace-local-only}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
+        mc mb --ignore-existing local/agent-traces &&
+        mc anonymous set none local/agent-traces
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-agenttrace}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-agenttrace-local-only}
+      MC_CONFIG_DIR: /tmp/.mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+
+  postgres:
+    image: postgres:17.5-alpine
+    environment:
+      POSTGRES_DB: agenttrace
+      POSTGRES_USER: ${POSTGRES_USER:-agenttrace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agenttrace-local-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.4.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      collector:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.0.1
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-agenttrace-local-only}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on: [prometheus]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  minio-data:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
+  otel-data:
