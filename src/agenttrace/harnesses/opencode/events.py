@@ -31,6 +31,8 @@ class OpenCodeModelEvent(BaseModel):
     output_tokens: int = Field(default=0, ge=0)
     cached_input_tokens: int = Field(default=0, ge=0)
     reasoning_tokens: int = Field(default=0, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0)
+    output: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,12 @@ def _integer(value: object) -> int:
     return (
         int(value) if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
     )
+
+
+def _number(value: object) -> float | None:
+    if isinstance(value, int | float) and not isinstance(value, bool) and value >= 0:
+        return float(value)
+    return None
 
 
 def sanitize_and_parse_jsonl(
@@ -151,33 +159,42 @@ def sanitize_and_parse_jsonl(
                     output_tokens=_integer(tokens.get("output")),
                     cached_input_tokens=_integer(cache.get("read")),
                     reasoning_tokens=_integer(tokens.get("reasoning")),
+                    cost_usd=_number(part.get("cost")),
                 )
             )
     encoded = ("\n".join(sanitized_lines) + ("\n" if sanitized_lines else "")).encode("utf-8")
+    final_text = "\n".join(text_parts)
+    if models and final_text:
+        models[-1] = models[-1].model_copy(update={"output": final_text})
     return encoded, ParsedOpenCodeEvents(
         event_count=len(payloads),
         invalid_line_count=invalid,
         tools=tuple(tools),
         models=tuple(models),
-        final_text="\n".join(text_parts),
+        final_text=final_text,
         redaction_stats=total_stats,
     )
 
 
-def emit_opencode_spans(run: AgentRun, events: ParsedOpenCodeEvents) -> None:
+def emit_opencode_spans(run: AgentRun, events: ParsedOpenCodeEvents, *, model_name: str) -> None:
     for model in events.models:
         with run.span(
             "opencode.model_generation",
             step_type="model_generation",
             kind="LLM",
             input={"event_sequence": model.sequence},
-            attributes={"gen_ai.provider.name": "zai", "agenttrace.transport": "opencode"},
+            attributes={
+                "gen_ai.provider.name": "zai",
+                "gen_ai.request.model": model_name,
+                "agenttrace.transport": "opencode",
+            },
         ) as result:
-            result.output = {"event_sequence": model.sequence}
+            result.output = model.output or {"event_sequence": model.sequence}
             result.input_tokens = model.input_tokens
             result.output_tokens = model.output_tokens
             result.cached_input_tokens = model.cached_input_tokens
             result.reasoning_tokens = model.reasoning_tokens
+            result.cost_usd = model.cost_usd
     for tool in events.tools:
         with run.span(
             f"opencode.tool.{tool.name}",

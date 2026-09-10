@@ -198,6 +198,7 @@ uv run agenttrace benchmark zai-opencode \
   --workspace /path/to/frozen/repository \
   --model glm-5.2 \
   --reasoning-effort max \
+  --session-id release-review-42 \
   --metadata-only \
   --otlp-endpoint http://localhost:4318
 ```
@@ -210,11 +211,20 @@ and workspace diff are always retained as audit evidence; `--metadata-only` cont
 response object and span content policy, not that audit log. The harness records the exact model,
 thinking mode, and reasoning effort and enforces them at the parent-side broker.
 
+`--session-id` copies the standard OpenTelemetry `session.id` attribute to every span. Backends such
+as Langfuse can then group the sample traces into one session. Use the same value in separate commands
+to extend a session. Add `--capture-content full` only when the task data policy permits prompts and
+sanitized model output to leave the process.
+
 Use `AGENTTRACE_OTLP_HEADERS='X-AgentTrace-Key=...'` when the destination OTLP endpoint itself requires
 authentication. This collector credential is independent of `ZAI_API_KEY`. The general API smoke
 command remains available as `agenttrace provider zai-smoke --endpoint-plan general`; it rejects Coding
 Plan use. See [model benchmarking](docs/model-benchmarking.md) for the threat model, artifacts, limits,
 and live-run checklist.
+
+To export directly to Langfuse v4, set the OTLP endpoint to
+`$LANGFUSE_BASE_URL/api/public/otel`. Set `AGENTTRACE_OTLP_HEADERS` to a Basic authorization header
+plus `x-langfuse-ingestion-version=4`. Keep that header in the environment, not a command argument.
 
 For containers, `compose.zai.yaml` runs only the general-API smoke path and mounts the credential from
 a Docker secret:

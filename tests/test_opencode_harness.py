@@ -202,12 +202,13 @@ def test_opencode_benchmark_collects_sanitized_trace_and_workspace_changes(
             {
                 "type": "step_finish",
                 "part": {
+                    "cost": 0.012,
                     "tokens": {
                         "input": 12,
                         "output": 5,
                         "reasoning": 2,
                         "cache": {"read": 3},
-                    }
+                    },
                 },
             },
             {"type": "text", "part": {"text": "unsafe YAML deserialization"}},
@@ -223,7 +224,7 @@ def test_opencode_benchmark_collects_sanitized_trace_and_workspace_changes(
 
     exporter = InMemorySpanExporter()
     telemetry = create_telemetry(
-        TelemetrySettings(capture_content=CaptureMode.METADATA),
+        TelemetrySettings(capture_content=CaptureMode.FULL),
         span_exporter=exporter,
     )
     objects = FileObjectStore(tmp_path / "objects")
@@ -234,6 +235,7 @@ def test_opencode_benchmark_collects_sanitized_trace_and_workspace_changes(
         telemetry=telemetry,
         objects=objects,
         experiment_id="opencode-test",
+        session_id="langfuse-observer-test",
         workspace_source=source,
         process_runner=fake_process,
         broker_http_client=broker_client,
@@ -273,10 +275,23 @@ def test_opencode_benchmark_collects_sanitized_trace_and_workspace_changes(
     assert real_key.encode("utf-8") not in stored
 
     spans = list(exporter.get_finished_spans())
-    assert sum(span.name == "agent.episode" for span in spans) == 1
+    assert sum(span.name == "code.security-review/unsafe-yaml" for span in spans) == 1
     assert any(span.name == "opencode.tool.edit" for span in spans)
     assert any(span.name == "opencode.model_generation" for span in spans)
     assert any(span.name == "credential_broker.forward" for span in spans)
+    assert all(
+        dict(span.attributes or {})["session.id"] == "langfuse-observer-test" for span in spans
+    )
+    input_span = next(span for span in spans if span.name == "task.input")
+    assert "isolated autonomous benchmark session" in str(
+        dict(input_span.attributes or {})["input.value"]
+    )
+    model_span = next(span for span in spans if span.name == "opencode.model_generation")
+    model_attributes = dict(model_span.attributes or {})
+    assert model_attributes["gen_ai.request.model"] == "glm-5.2"
+    assert model_attributes["llm.cost.total"] == 0.012
+    assert "unsafe YAML deserialization" in str(model_attributes["output.value"])
+    assert real_key not in str([dict(span.attributes or {}) for span in spans])
 
 
 def test_workspace_rejects_symlinks_that_escape_source(tmp_path: Path) -> None:

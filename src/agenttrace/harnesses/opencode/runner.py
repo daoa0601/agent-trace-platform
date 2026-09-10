@@ -83,6 +83,7 @@ def run_opencode_benchmark(
     telemetry: TelemetryRuntime,
     objects: ObjectStore,
     experiment_id: str,
+    session_id: str | None = None,
     workspace_source: Path | None = None,
     model: str = "glm-5.2",
     reasoning_effort: ZAIReasoningEffort = ZAIReasoningEffort.MAX,
@@ -135,6 +136,8 @@ def run_opencode_benchmark(
         started_at = _utc_now()
         run = telemetry.run(
             experiment_id=experiment_id,
+            session_id=session_id,
+            trace_name=f"{task.task_id}/{sample.sample_id}" if session_id else None,
             task_id=task.task_id,
             task_version=task.version,
             task_split=task.split,
@@ -177,7 +180,7 @@ def run_opencode_benchmark(
                             "task.input",
                             step_type="user_input",
                             kind="AGENT",
-                            input=sample.input,
+                            input=prompt,
                             attributes={"agenttrace.task.sample_id": sample.sample_id},
                         ):
                             pass
@@ -205,7 +208,7 @@ def run_opencode_benchmark(
                                 known_secrets=(real_key, broker.client_token),
                                 redaction_mode=task.data_policy.redaction_mode,
                             )
-                            emit_opencode_spans(run, parsed)
+                            emit_opencode_spans(run, parsed, model_name=model)
                             benchmark_result.output = {
                                 "exit_code": process.exit_code,
                                 "timed_out": process.timed_out,

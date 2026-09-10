@@ -34,6 +34,8 @@ def test_telemetry_emits_linked_openinference_spans_and_redacts_content() -> Non
     assert runtime.settings.parsed_headers() == {"authorization": "secret"}
     with runtime.run(
         experiment_id="exp_test",
+        session_id="session-test",
+        trace_name="support routing test",
         run_id="run_test",
         episode_id="episode_test",
         task_id="support.intent-routing",
@@ -59,7 +61,7 @@ def test_telemetry_emits_linked_openinference_spans_and_redacts_content() -> Non
 
     spans = list(exporter.get_finished_spans())
     assert {span.name for span in spans} == {
-        "agent.episode",
+        "support routing test",
         "agent.episode.end",
         "model.generate",
         "legacy.tool_selected",
@@ -71,6 +73,7 @@ def test_telemetry_emits_linked_openinference_spans_and_redacts_content() -> Non
         sequences.append(sequence)
     sequences.sort()
     assert sequences == [0, 1, 2, 3]
+    assert all(dict(span.attributes or {})["session.id"] == "session-test" for span in spans)
     model = next(span for span in spans if span.name == "model.generate")
     model_attributes = dict(model.attributes or {})
     assert model_attributes["openinference.span.kind"] == "LLM"
@@ -78,7 +81,7 @@ def test_telemetry_emits_linked_openinference_spans_and_redacts_content() -> Non
     assert model_attributes["llm.token_count.completion"] == 2
     assert "must-not-escape" not in str(model_attributes["input.value"])
     assert "[REDACTED_SECRET]" in str(model_attributes["input.value"])
-    root = next(span for span in spans if span.name == "agent.episode")
+    root = next(span for span in spans if span.name == "support routing test")
     assert root.parent is None
     assert root.context is not None
     for span in spans:
@@ -117,6 +120,9 @@ def test_telemetry_metadata_disabled_and_error_paths() -> None:
     input_bytes = failing_attributes["agenttrace.input.bytes"]
     assert isinstance(input_bytes, int) and input_bytes > 0
     runtime.close()
+
+    with pytest.raises(ValueError, match="printable ASCII"):
+        runtime.run(experiment_id="invalid", session_id="not\nprintable")
 
 
 def test_telemetry_emits_explicit_benchmark_stages() -> None:

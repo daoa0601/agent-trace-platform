@@ -95,9 +95,18 @@ uv run agenttrace benchmark zai-opencode \
   --reasoning-effort max \
   --max-model-calls 64 \
   --watchdog-seconds 900 \
+  --session-id release-review-42 \
   --metadata-only \
   --otlp-endpoint http://127.0.0.1:4318
 ```
+
+`--session-id` adds the standard OpenTelemetry `session.id` attribute to the root and every child
+span. Reuse a session ID to group traces from several samples or commands. The value must contain 1
+to 200 printable ASCII characters.
+
+For a Langfuse v4 destination, use `${LANGFUSE_BASE_URL%/}/api/public/otel` as the endpoint. Put the
+Basic authorization value and `x-langfuse-ingestion-version=4` in `AGENTTRACE_OTLP_HEADERS`. Do not
+put credentials in CLI arguments.
 
 Use `--watchdog-seconds 0` for an intentionally unbounded session. Each sample receives:
 

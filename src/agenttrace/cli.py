@@ -490,6 +490,12 @@ def zai_opencode_benchmark(
     ] = None,
     max_model_calls: Annotated[int, typer.Option(min=1)] = 256,
     experiment_id: Annotated[str, typer.Option()] = "zai-opencode-benchmark",
+    session_id: Annotated[
+        str | None,
+        typer.Option(
+            help="Portable OTLP session ID copied to every span; Langfuse groups matching traces."
+        ),
+    ] = None,
     output_root: Annotated[
         Path,
         typer.Option(help="Local immutable benchmark object-store root."),
@@ -534,6 +540,7 @@ def zai_opencode_benchmark(
             otlp_endpoint=otlp_endpoint or "http://127.0.0.1:4318/v1/traces",
             service_name="agenttrace-zai-opencode-benchmark",
             capture_content=capture,
+            redaction_mode=task.data_policy.redaction_mode,
         )
     )
     try:
@@ -544,6 +551,7 @@ def zai_opencode_benchmark(
             telemetry=telemetry,
             objects=_store(output_root),
             experiment_id=experiment_id,
+            session_id=session_id,
             workspace_source=workspace,
             model=model,
             reasoning_effort=effort,
@@ -584,6 +592,7 @@ def zai_opencode_benchmark(
                 "thinking_mode": execution.manifest.thinking_mode,
                 "reasoning_effort": execution.manifest.reasoning_effort,
                 "experiment_id": execution.manifest.experiment_id,
+                "session_id": session_id,
                 "manifest_key": execution.manifest_key,
                 "object_root": str(output_root.expanduser().resolve()),
                 "summary": summary.model_dump(mode="json"),

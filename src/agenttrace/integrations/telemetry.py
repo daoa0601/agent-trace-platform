@@ -135,6 +135,18 @@ def _otel_value(value: Any) -> str | bool | int | float | list[str]:
     return _serialized(value)
 
 
+def _context_value(value: str | None, *, name: str, ascii_only: bool = False) -> str | None:
+    if value is None:
+        return None
+    if value != value.strip() or not value or len(value) > 200:
+        raise ValueError(f"{name} must contain 1 to 200 characters without outer whitespace")
+    if ascii_only and not value.isascii():
+        raise ValueError(f"{name} must contain printable ASCII characters")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError(f"{name} must contain printable ASCII characters")
+    return value
+
+
 class TelemetryRuntime:
     """Own an isolated tracer provider and its exporter lifecycle."""
 
@@ -154,6 +166,8 @@ class TelemetryRuntime:
         self,
         *,
         experiment_id: str,
+        session_id: str | None = None,
+        trace_name: str | None = None,
         run_id: str | None = None,
         episode_id: str | None = None,
         task_id: str | None = None,
@@ -164,6 +178,8 @@ class TelemetryRuntime:
         return AgentRun(
             runtime=self,
             experiment_id=experiment_id,
+            session_id=_context_value(session_id, name="session_id", ascii_only=True),
+            trace_name=_context_value(trace_name, name="trace_name"),
             run_id=run_id or new_id("run"),
             episode_id=episode_id or new_id("episode"),
             task_id=task_id,
@@ -197,6 +213,8 @@ class AgentRun:
         *,
         runtime: TelemetryRuntime,
         experiment_id: str,
+        session_id: str | None,
+        trace_name: str | None,
         run_id: str,
         episode_id: str,
         task_id: str | None,
@@ -206,6 +224,8 @@ class AgentRun:
     ) -> None:
         self.runtime = runtime
         self.experiment_id = experiment_id
+        self.session_id = session_id
+        self.trace_name = trace_name
         self.run_id = run_id
         self.episode_id = episode_id
         self.task_id = task_id
@@ -247,6 +267,8 @@ class AgentRun:
             values["agenttrace.task.version"] = self.task_version
         if self.task_split:
             values["agenttrace.task.split"] = self.task_split
+        if self.session_id:
+            values["session.id"] = self.session_id
         return values
 
     def __enter__(self) -> AgentRun:
@@ -254,7 +276,10 @@ class AgentRun:
             raise RuntimeError("AgentRun cannot be entered twice")
         attributes = self._common_attributes("episode_start", "AGENT")
         attributes.update({key: _otel_value(value) for key, value in self.attributes.items()})
-        self._root = self.runtime.tracer.start_span("agent.episode", attributes=attributes)
+        self._root = self.runtime.tracer.start_span(
+            self.trace_name or "agent.episode",
+            attributes=attributes,
+        )
         self._root_scope = trace.use_span(self._root, end_on_exit=False)
         self._root_scope.__enter__()
         self._context_token = _CURRENT_RUN.set(self)
