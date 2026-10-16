@@ -113,6 +113,7 @@ def _referenced_contents(event: TraceEvent) -> Iterable[Content]:
                 event.environment.action,
             ]
         )
+    values.extend((event.offloaded_attributes or {}).values())
     return [content for content in values if content is not None and content.ref is not None]
 
 

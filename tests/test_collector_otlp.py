@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+import zstandard
 from fastapi.testclient import TestClient
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.trace.v1.trace_pb2 import Status
@@ -14,7 +15,7 @@ from agenttrace.collector.app import create_app
 from agenttrace.collector.otlp import convert_otlp_request
 from agenttrace.models import EventBatch, StepType
 from agenttrace.settings import CollectorSettings
-from agenttrace.storage import FileObjectStore
+from agenttrace.storage import BlobStore, FileObjectStore
 from agenttrace.storage.raw import decode_raw_batch
 
 from .conftest import START, TRACE_ID, make_event
@@ -159,6 +160,42 @@ def test_otlp_http_endpoint_writes_native_raw_object(tmp_path: Path) -> None:
     keys = list(objects.list_keys("raw"))
     assert len(keys) == 1
     assert decode_raw_batch(objects.get_bytes(keys[0]))[0].experiment_id == "exp_otel"
+
+
+def test_otlp_endpoint_offloads_large_span_attributes(tmp_path: Path) -> None:
+    objects = FileObjectStore(tmp_path / "objects")
+    settings = CollectorSettings(environment="test", object_root=tmp_path / "unused")
+    client = TestClient(create_app(settings, objects))
+    request = make_otlp_request()
+    span = request.resource_spans[0].scope_spans[0].spans[0]
+    question = "q" * 40_000
+    [input_attribute] = [item for item in span.attributes if item.key == "input.value"]
+    input_attribute.value.string_value = json.dumps({"question": question})
+    _add_string_attribute(span, "llm.input_messages.0.message.content", question)
+    response = client.post(
+        "/v1/otlp/v1/traces",
+        content=request.SerializeToString(),
+        headers={"Content-Type": "application/x-protobuf"},
+    )
+    assert response.status_code == 200
+    [key] = list(objects.list_keys("raw"))
+    raw = zstandard.ZstdDecompressor().decompress(objects.get_bytes(key))
+    assert question.encode() not in raw
+    event = decode_raw_batch(objects.get_bytes(key))[0]
+    assert event.input is not None and event.input.ref is not None
+    assert event.offloaded_attributes is not None
+    assert set(event.offloaded_attributes) == {
+        "input.value",
+        "llm.input_messages.0.message.content",
+    }
+    assert "input.value" not in event.attributes
+    assert event.attributes["gen_ai.request.model"] == "test-model"
+    assert event.attributes["output.value"] == '{"answer":"world"}'
+    blobs = BlobStore(objects)
+    stored_message = blobs.get_json(
+        event.offloaded_attributes["llm.input_messages.0.message.content"]
+    )
+    assert stored_message == question
 
 
 def test_collector_rejects_oversized_and_invalid_otlp(tmp_path: Path) -> None:

@@ -6,10 +6,11 @@ import hashlib
 from dataclasses import dataclass
 
 import zstandard
+from pydantic import JsonValue
 
 from agenttrace.models import Content, EventBatch, TraceEvent
 from agenttrace.redaction import RedactionStats, Redactor
-from agenttrace.storage.blobs import BlobStore
+from agenttrace.storage.blobs import BlobStore, canonical_json
 from agenttrace.storage.objects import ObjectStore
 
 
@@ -73,8 +74,24 @@ class RawBatchWriter:
             event_ids=[event.event_id for event in events],
         )
 
+    def _offload_attributes(
+        self, event: TraceEvent
+    ) -> tuple[dict[str, JsonValue], dict[str, Content] | None]:
+        """Move attribute values to blobs, largest first, until the inline rest fits the limit."""
+        inline = dict(event.attributes)
+        offloaded = dict(event.offloaded_attributes or {})
+        sizes = {key: len(canonical_json(value)) for key, value in inline.items()}
+        total = len(canonical_json(inline))
+        for key in sorted(sizes, key=lambda name: (-sizes[name], name)):
+            if sizes[key] <= self.inline_payload_bytes and total <= self.inline_payload_bytes:
+                break
+            offloaded[key] = self.blobs.put_json(inline.pop(key)).content
+            total = len(canonical_json(inline))
+        return inline, offloaded or None
+
     def _offload_event(self, event: TraceEvent) -> TraceEvent:
         updates: dict[str, object] = {}
+        updates["attributes"], updates["offloaded_attributes"] = self._offload_attributes(event)
         for field_name in ("input", "output"):
             content = getattr(event, field_name)
             updates[field_name] = self.blobs.maybe_offload(content, self.inline_payload_bytes)

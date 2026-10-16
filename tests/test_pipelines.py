@@ -288,11 +288,23 @@ def test_normalizer_quarantines_conflicts_and_broken_references(object_store, su
             "output": Content(ref="object://blobs/missing.json.zst", sha256="a" * 64),
         }
     )
-    RawBatchWriter(object_store).write(EventBatch(worker_id="broken", events=[broken]))
+    broken_attribute = events[3].model_copy(
+        update={
+            "event_id": "evt_broken_attribute_ref",
+            "step_id": "step_broken_attribute_ref",
+            "sequence_number": 21,
+            "offloaded_attributes": {
+                "input.value": Content(ref="object://blobs/missing-attr.json.zst", sha256="b" * 64)
+            },
+        }
+    )
+    RawBatchWriter(object_store).write(
+        EventBatch(worker_id="broken", events=[broken, broken_attribute])
+    )
     normalized = normalize_raw_traces(object_store)
     assert normalized.manifest.metrics["conflicting_event_count"] == 1
-    assert normalized.manifest.metrics["broken_reference_count"] == 1
-    assert normalized.manifest.metrics["quarantined_record_count"] == 3
+    assert normalized.manifest.metrics["broken_reference_count"] == 2
+    assert normalized.manifest.metrics["quarantined_record_count"] == 4
     quarantine = read_parquet(object_store, normalized.manifest.tables["quarantine"])
     assert any("conflicting duplicate" in str(row["error"]) for row in quarantine)
     assert any("broken object references" in str(row["error"]) for row in quarantine)

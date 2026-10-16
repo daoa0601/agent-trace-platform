@@ -86,3 +86,71 @@ def test_content_requires_digest_for_reference() -> None:
         Content(ref="object://missing")
     with pytest.raises(ValueError, match="not both"):
         Content(inline="x", ref="object://x", sha256="a" * 64)
+
+
+def test_raw_writer_offloads_oversized_attributes_after_redaction(tmp_path, support_task) -> None:
+    store = FileObjectStore(tmp_path / "objects")
+    prompt = "summarize sk-abcdefghijklmnopqrstuv " + "y" * 400
+    event = make_event(
+        1,
+        StepType.USER_INPUT,
+        task=support_task,
+        attributes={"status": "running", "llm.input_messages.0.message.content": prompt},
+    )
+    writer = RawBatchWriter(store, inline_payload_bytes=256)
+    result = writer.write(EventBatch(worker_id="worker-a", events=[event]))
+    raw = zstandard.ZstdDecompressor().decompress(store.get_bytes(result.key))
+    assert b"y" * 400 not in raw
+    stored = decode_raw_batch(store.get_bytes(result.key))[0]
+    assert stored.attributes == {"status": "running"}
+    assert stored.offloaded_attributes is not None
+    reference = stored.offloaded_attributes["llm.input_messages.0.message.content"]
+    restored = cast(str, BlobStore(store).get_json(reference))
+    assert restored.startswith("summarize [REDACTED_SECRET] ")
+    assert result.redactions.secret_values == 1
+
+
+def test_raw_writer_bounds_total_inline_attribute_size(tmp_path, support_task) -> None:
+    store = FileObjectStore(tmp_path / "objects")
+    attributes: dict[str, JsonValue] = {
+        f"llm.input_messages.{index}.message.content": str(index) * (100 + index)
+        for index in range(5)
+    }
+    attributes["status"] = "running"
+    event = make_event(1, StepType.USER_INPUT, task=support_task, attributes=attributes)
+    writer = RawBatchWriter(store, inline_payload_bytes=256)
+    result = writer.write(EventBatch(worker_id="worker-a", events=[event]))
+    stored = decode_raw_batch(store.get_bytes(result.key))[0]
+    assert stored.offloaded_attributes is not None
+    # No single value is over the limit, but together they are. Largest values move first, so the
+    # smallest message stays inline with the status flag.
+    assert set(stored.offloaded_attributes) == {
+        f"llm.input_messages.{index}.message.content" for index in (1, 2, 3, 4)
+    }
+    assert set(stored.attributes) == {"status", "llm.input_messages.0.message.content"}
+    blobs = BlobStore(store)
+    for key, reference in stored.offloaded_attributes.items():
+        assert blobs.get_json(reference) == attributes[key]
+
+
+def test_raw_writer_keeps_small_attributes_inline(tmp_path, support_task) -> None:
+    store = FileObjectStore(tmp_path / "objects")
+    event = make_event(1, StepType.USER_INPUT, task=support_task, attributes={"status": "ok"})
+    result = RawBatchWriter(store).write(EventBatch(worker_id="worker-a", events=[event]))
+    stored = decode_raw_batch(store.get_bytes(result.key))[0]
+    assert stored.attributes == {"status": "ok"}
+    assert stored.offloaded_attributes is None
+    raw = zstandard.ZstdDecompressor().decompress(store.get_bytes(result.key))
+    assert b"offloaded_attributes" not in raw
+
+
+def test_trace_event_rejects_attribute_both_inline_and_offloaded(support_task) -> None:
+    reference = Content(ref="object://blobs/x.json.zst", sha256="a" * 64)
+    with pytest.raises(ValueError, match="both inline and offloaded"):
+        make_event(
+            1,
+            StepType.USER_INPUT,
+            task=support_task,
+            attributes={"input.value": "x"},
+            offloaded_attributes={"input.value": reference},
+        )

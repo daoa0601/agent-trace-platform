@@ -218,6 +218,8 @@ class TraceEvent(StrictModel):
     provenance: Provenance = Field(default_factory=Provenance)
     privacy: Privacy = Field(default_factory=Privacy)
     attributes: dict[str, JsonValue] = Field(default_factory=dict)
+    # Attribute values too large to keep inline, moved to the blob store by the raw writer.
+    offloaded_attributes: dict[str, Content] | None = None
 
     @model_validator(mode="after")
     def validate_timestamps_and_shape(self) -> TraceEvent:
@@ -232,6 +234,12 @@ class TraceEvent(StrictModel):
             raise ValueError("reward steps must include reward data")
         if self.step_type in {StepType.TOOL_CALL, StepType.TOOL_RESULT} and self.tool is None:
             raise ValueError("tool steps must include tool data")
+        if self.offloaded_attributes:
+            if any(content.ref is None for content in self.offloaded_attributes.values()):
+                raise ValueError("offloaded attributes must be object references")
+            overlap = sorted(self.attributes.keys() & self.offloaded_attributes.keys())
+            if overlap:
+                raise ValueError(f"attributes cannot be both inline and offloaded: {overlap}")
         return self
 
 
