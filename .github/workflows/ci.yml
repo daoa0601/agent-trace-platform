@@ -12,14 +12,24 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: agent-trace-platform
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: agent-trace-platform
+          persist-credentials: false
+      # uv.lock resolves this sibling as ../benchmark-audit-core; use its default branch.
+      - uses: actions/checkout@v4
+        with:
+          repository: daoa0601/benchmark-audit-core
+          path: benchmark-audit-core
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          cache-dependency-glob: agent-trace-platform/uv.lock
       - run: uv python install 3.11
       - run: uv sync --all-extras --locked
-      - run: uv run ruff format --check .
-      - run: uv run ruff check .
-      - run: uv run basedpyright
-      - run: uv run pytest -v --cov=agenttrace --cov-report=term-missing
+      - run: make check

@@ -5,6 +5,8 @@ services:
     build:
       context: .
       dockerfile: services/collector/Dockerfile
+      additional_contexts:
+        benchmark-audit-core: ../benchmark-audit-core
     environment:
       AGENTTRACE_ENVIRONMENT: development
       AGENTTRACE_API_KEYS: ${AGENTTRACE_API_KEY:-local-development-key}

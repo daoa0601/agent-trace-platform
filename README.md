@@ -4,11 +4,11 @@ AgentTrace is a production-oriented data plane for collecting general agent trac
 immutably, rebuilding validated episodes, running versioned evaluations, and freezing reproducible
 datasets for debugging, regression evaluation, SFT, preference optimization, or RL.
 
-It is the clean successor to the coding-focused research artifact in
+AgentTrace generalizes trace-collection ideas first prototyped in the frozen course repository
 [`daoa0601/cs-e4645-data-intensive-computing`](https://github.com/daoa0601/cs-e4645-data-intensive-computing).
-That repository remains a frozen sibling reference; this package does not import or patch its legacy
-runners. [The migration map](docs/migration-from-research.md) documents which ideas were decomposed
-and generalized here.
+
+This checkout needs the sibling `benchmark-audit-core` next to it; see
+[the catalog README](../../README.md#cross-repo-boundaries) for the layout and cross-repo boundaries.
 
 ## What is ready
 
@@ -26,29 +26,31 @@ and generalized here.
 - Frozen eval, SFT, preference, and strict-RL dataset builders with source snapshot manifests.
 - Versioned task contracts, reproducible Docker environment setup, MinIO, PostgreSQL operational
   metadata, Prometheus alerts, and a provisioned Grafana dashboard.
-- Provider-neutral JSONL samples, inline evaluators, an optional Inspect AI adapter, a general Z.AI
-  API runner, and an isolated OpenCode transport for eligible Z.AI Coding Plan sessions.
+- Provider-neutral JSONL samples, versioned task evaluators, and an optional Inspect AI adapter.
 - Framework-neutral OpenTelemetry/OpenInference trace export, span-derived RED metrics, and optional
   Phoenix trace exploration.
-- Auditable benchmark-session manifests with hardware provenance, explicit compile/check/benchmark
-  stages, independent anti-gaming re-tests, deterministic headline gating, and immutable reports.
+- Explicit compile/check/benchmark/audit-retest stage spans and immutable, content-addressed
+  storage for audit bundles built with `benchmark-audit-core`.
 
-The portable audit models, gate, evidence references, hashing, and detached-seal primitives live in
-the sibling [`benchmark-audit-core`](../benchmark-audit-core/) package. `agenttrace.audits` preserves
-its original model and gate import surface as compatibility re-exports; new code that needs only the
-portable API should import `benchmark_audit_core` directly. AgentTrace continues to own
-`persist_audit_bundle`, the audit CLI, trace instrumentation, and immutable evidence storage.
+AgentTrace is the trace lake only. Benchmark execution, model-provider harnesses, and claim gating
+are out of scope; the catalog README names the repository that owns them.
 
-The core package is intentionally workspace-local. This checkout resolves it through
-`../benchmark-audit-core`, so the sibling directory is part of the development environment. A
-relocated clone or CI job must provide that sibling checkout, vendor the same source, or point
-`[tool.uv.sources]` at an explicitly pinned Git revision, then regenerate and verify `uv.lock`.
+## Public Python API
 
-AgentTrace is an observability and evidence plane, not a model-traffic gateway. It does not select
-providers, own request retries or fallbacks, or calculate gateway billing, and this repository has
-no live Vercel AI Gateway integration. A runtime that uses Nexus or a managed gateway must choose
-one retry/fallback owner and emit the resolved provider/model/route and attempt evidence that
-AgentTrace should retain.
+Code outside this repository should import only these modules:
+
+| Module | Use |
+|---|---|
+| `agenttrace.models` | canonical event, step, task-reference, and token-usage schemas |
+| `agenttrace.sdk` | `TraceClient` / `TraceSession` for native batched trace emission |
+| `agenttrace.integrations` | `create_telemetry`, `TelemetrySettings`, `CaptureMode`, `AgentRun`, `SpanResult` |
+| `agenttrace.tasks` | `TaskDefinition`, `EvaluatorSpec`, `TaskSample`, loaders, prompt rendering, JSON digests |
+| `agenttrace.storage` | `ObjectStore`, `FileObjectStore`, `S3ObjectStore`, `BlobStore`, `RawBatchWriter` |
+| `agenttrace.redaction` | `Redactor`, `RedactionStats`, and the shared secret/private-reasoning rules |
+| `agenttrace.audits` | `persist_audit_bundle(objects, bundle)` for immutable audit-bundle storage |
+| `agenttrace.pipelines` | normalize, episode, evaluation, and dataset snapshot builders |
+
+Other submodules are implementation details and may change without notice.
 
 ## Data flow
 
@@ -165,74 +167,14 @@ attributes that the collector maps into canonical events. Content capture defaul
 which records byte counts and SHA-256 digests rather than prompts or responses.
 
 For autonomous benchmark loops, use `run.benchmark_stage("compile" | "check" | "benchmark" |
-"audit_retest")`. The [benchmark integrity protocol](docs/auditable-benchmarks.md) connects those
-spans to an observed hardware profile, final artifact, empirical re-tests, and a publication gate.
+"audit_retest")`. [Auditable benchmarks](docs/auditable-benchmarks.md) describes what AgentTrace
+records and stores for an audited benchmark session.
 
-## Model benchmarks and live trace collection
-
-AgentTrace's task/sample contract and stored benchmark manifests are evaluation-framework agnostic.
-Inspect AI remains an optional control plane; it is no longer required to run or retain an evaluation.
-There are two deliberately separate Z.AI transports, with no automatic fallback between them.
-
-For a **general API key**, run the provider directly:
-
-```bash
-export ZAI_API_KEY='...'
-uv run agenttrace benchmark zai-api \
-  taskpacks/examples/support-routing.yaml \
-  taskpacks/examples/support-routing.samples.jsonl \
-  --model glm-5.2 \
-  --thinking-mode enabled \
-  --reasoning-effort max \
-  --metadata-only \
-  --otlp-endpoint http://localhost:4318
-```
-
-For an eligible **Coding Plan key**, install OpenCode and use its isolated transport:
-
-```bash
-export ZAI_API_KEY='...'
-uv run agenttrace benchmark zai-opencode \
-  taskpacks/examples/code-review.yaml \
-  examples/inspect/code-review.jsonl \
-  --workspace /path/to/frozen/repository \
-  --model glm-5.2 \
-  --reasoning-effort max \
-  --session-id release-review-42 \
-  --metadata-only \
-  --otlp-endpoint http://localhost:4318
-```
-
-Each sample gets a new OpenCode process, configuration directory, and copied workspace. The parent
-process holds the real key; OpenCode receives only a short-lived capability for a model-locked,
-call-bounded loopback broker. Project `.env`, `.opencode`, and OpenCode configuration files are not
-copied. Prompts and credentials are absent from process arguments. The sanitized OpenCode JSONL trace
-and workspace diff are always retained as audit evidence; `--metadata-only` controls the separate final
-response object and span content policy, not that audit log. The harness records the exact model,
-thinking mode, and reasoning effort and enforces them at the parent-side broker.
-
-`--session-id` copies the standard OpenTelemetry `session.id` attribute to every span. Backends such
-as Langfuse can then group the sample traces into one session. Use the same value in separate commands
-to extend a session. Add `--capture-content full` only when the task data policy permits prompts and
-sanitized model output to leave the process.
-
-Use `AGENTTRACE_OTLP_HEADERS='X-AgentTrace-Key=...'` when the destination OTLP endpoint itself requires
-authentication. This collector credential is independent of `ZAI_API_KEY`. The general API smoke
-command remains available as `agenttrace provider zai-smoke --endpoint-plan general`; it rejects Coding
-Plan use. See [model benchmarking](docs/model-benchmarking.md) for the threat model, artifacts, limits,
-and live-run checklist.
-
-To export directly to Langfuse v4, set the OTLP endpoint to
-`$LANGFUSE_BASE_URL/api/public/otel`. Set `AGENTTRACE_OTLP_HEADERS` to a Basic authorization header
-plus `x-langfuse-ingestion-version=4`. Keep that header in the environment, not a command argument.
-
-For containers, `compose.zai.yaml` runs only the general-API smoke path and mounts the credential from
-a Docker secret:
-
-```bash
-docker compose -f compose.yaml -f compose.zai.yaml \
-  --profile live run --build --rm zai-smoke
-```
+Use `AGENTTRACE_OTLP_HEADERS='X-AgentTrace-Key=...'` when the destination OTLP endpoint itself
+requires authentication. To export directly to Langfuse v4, set the OTLP endpoint to
+`$LANGFUSE_BASE_URL/api/public/otel` and put a Basic authorization header plus
+`x-langfuse-ingestion-version=4` in `AGENTTRACE_OTLP_HEADERS`. Keep that header in the environment,
+not a command argument.
 
 ## Batch pipeline
 
@@ -251,14 +193,14 @@ lack policy checkpoint, tokenizer, generation-engine, or behavior-logprob proven
 ## Repository layout
 
 ```text
-src/agenttrace/       schemas, SDK, collector, benchmark runners, integrations, storage, and pipelines
+src/agenttrace/       schemas, SDK, collector, integrations, storage, and pipelines
 services/collector/   deployable collector image
 pipelines/            batch-job boundary and deployment notes
 taskpacks/            versioned task/evaluator/data-policy definitions
 environments/         reproducible task sandbox images
 infra/                MinIO/PostgreSQL/OTel/Prometheus/Grafana configuration
 tests/                unit, API, quality, and end-to-end tests
-docs/                 architecture, schema, security, operations, and migration decisions
+docs/                 architecture, schema, security, and operations decisions
 ```
 
 ## Design constraints

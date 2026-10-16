@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from agenttrace.audits.models import AuditPolicy, SessionPolicy
+from benchmark_audit_core import AuditPolicy, SessionPolicy
 
 
 class StrictModel(BaseModel):

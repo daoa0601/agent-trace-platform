@@ -43,18 +43,13 @@ versioned task + clean commit + hardware observation
        immutable audit bundle + findings report
 ```
 
-The standalone `benchmark-audit-core` package supplies strict Pydantic models and the deterministic
-gate for this chain. `agenttrace.audits` re-exports the core model and gate symbols for
-compatibility; the AgentTrace-owned addition is `persist_audit_bundle` and its object-store adapter.
-All evidence uses a URI, SHA-256 digest, media type, and optional byte size. The hardware profile
+The `benchmark-audit-core` package supplies the strict Pydantic models and the deterministic gate for
+this chain; import them from `benchmark_audit_core`. AgentTrace contributes the trace
+instrumentation below and `agenttrace.audits.persist_audit_bundle`, which stores a built bundle in an
+AgentTrace object store. All evidence uses a URI, SHA-256 digest, media type, and optional byte size. The hardware profile
 records accelerator vendor/model/count, optimization scope, driver/runtime versions, and a digest
 of observed inventory output. Do not put serial numbers, usernames, or other host identifiers in
 manifests.
-
-`benchmark-audit-core` is a workspace-local dependency by design. AgentTrace's
-`[tool.uv.sources]` entry points to `../benchmark-audit-core`, so a relocated checkout or CI job
-must supply that sibling source, vendor it, or use an explicitly pinned Git source. Any source
-change must be followed by lock regeneration and frozen-environment verification.
 
 ## Trace instrumentation
 
@@ -96,19 +91,23 @@ stay out of Prometheus labels; they remain available in traces and immutable man
    to the original score.
 4. Attach the `IndependentAudit`, including all findings. `accepted` is not equivalent to `resolved`
    for critical or high findings and still blocks the headline gate.
-5. Validate, render, and persist the bundle:
+5. Build the bundle with `benchmark_audit_core.build_audit_bundle` (the catalog's benchmark gate
+   CLI does this) and persist it:
 
-   ```bash
-   uv run agenttrace audit gate path/to/session.json \
-     --report outputs/audits/session.md \
-     --object-root data/object-store
+   ```python
+   from pathlib import Path
+
+   from benchmark_audit_core import AuditableSession, build_audit_bundle
+
+   from agenttrace.audits import persist_audit_bundle
+   from agenttrace.storage import FileObjectStore
+
+   bundle = build_audit_bundle(AuditableSession.model_validate_json(manifest_json))
+   stored = persist_audit_bundle(FileObjectStore(Path("data/object-store")), bundle)
    ```
 
-The command exits with code 2 when a headline is blocked, code 1 for an invalid manifest, and code 0
-for a passed or non-applicable gate. Its JSON output contains only identifiers and gate status. The
-content-addressed bundle is written under `audits/bundles/` without overwriting an existing object.
-The validation and report are produced by `benchmark-audit-core`; persistence under that key remains
-an AgentTrace responsibility.
+The content-addressed bundle is written under `audits/bundles/<bundle digest>.json` without
+overwriting an existing object; persisting the same bundle again returns `created=False`.
 
 ## Default anti-gaming re-tests
 
@@ -127,12 +126,8 @@ their task definition. The gate never infers a pass from missing evidence.
 - `benchmark-audit-core` validates evidence metadata; it does not retrieve referenced bytes, prove
   that a digest is authentic or relevant to a claim, execute re-tests, redact content, or enforce
   retention. Harnesses and AgentTrace integrations own those controls.
-- AgentTrace stores traces and evidence; it does not route model requests, own provider retries or
-  fallbacks, or calculate provider/gateway billing. There is no live Vercel AI Gateway integration
-  in this repository.
-- If a harness later uses Nexus or a managed gateway, exactly one layer must own retry/fallback. The
-  harness must emit the resolved route and attempt history; AgentTrace can preserve those facts but
-  cannot reconstruct hidden gateway attempts after the fact.
+- AgentTrace stores traces and evidence; it does not route model requests. Which layer owns
+  retries and fallbacks is cross-repo policy in [the catalog README](../../../README.md#cross-repo-boundaries).
 - The collector records evidence; it does not decide benchmark correctness on the ingestion path.
 - A task-specific harness owns compilation, oracle checks, cache controls, and timing methodology.
 - An agent cannot self-attest independence, and changing reviewer identity alone is insufficient if

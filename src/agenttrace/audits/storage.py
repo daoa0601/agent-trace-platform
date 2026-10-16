@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from agenttrace.audits.models import AuditBundle
 from agenttrace.storage.objects import ObjectInfo, ObjectStore
+from benchmark_audit_core import AuditBundle
 
 
 def persist_audit_bundle(objects: ObjectStore, bundle: AuditBundle) -> ObjectInfo:
