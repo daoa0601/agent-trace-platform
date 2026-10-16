@@ -19,19 +19,11 @@ uv run agenttrace task validate taskpacks/examples/support-routing.yaml
 uv run agenttrace task validate taskpacks/examples/kernel-optimization.yaml
 ```
 
-Run the included non-coding sample through a general model API with:
-
-```bash
-uv run agenttrace benchmark zai-api \
-  taskpacks/examples/support-routing.yaml \
-  taskpacks/examples/support-routing.samples.jsonl
-```
-
 Changing a prompt, evaluator, reference answer, container image, or data policy requires a new task
 version. Historical traces continue to resolve against the exact version they recorded.
 
 Task policy is necessary but not sufficient for a publishable benchmark claim. Each actual run must
 also produce an `AuditableSession` manifest with observed hardware evidence, content digests, stage
-counts, and an independent audit. The portable policy types come from `benchmark-audit-core` and are
-re-exported by `agenttrace.audits`; AgentTrace adds task embedding and persistence. See
+counts, and an independent audit. The portable policy types come from `benchmark-audit-core`;
+AgentTrace embeds them in task definitions and persists audit bundles. See
 [the benchmark integrity protocol](../docs/auditable-benchmarks.md).

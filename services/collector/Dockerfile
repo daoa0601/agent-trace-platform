@@ -7,6 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 RUN pip install --no-cache-dir uv==0.9.5
 
+# uv.lock resolves benchmark-audit-core as ../benchmark-audit-core. Supply the sibling as a named
+# build context (compose.yaml does this; with plain docker build pass
+# --build-context benchmark-audit-core=../benchmark-audit-core).
+COPY --from=benchmark-audit-core pyproject.toml README.md LICENSE /benchmark-audit-core/
+COPY --from=benchmark-audit-core src /benchmark-audit-core/src
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN uv sync --frozen --no-dev

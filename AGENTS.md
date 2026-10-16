@@ -1,7 +1,10 @@
 # AgentTrace project context
 
 AgentTrace is a general agent-data platform, not a coding benchmark. Keep task semantics,
-environment setup, trace collection, evaluation, and dataset export independent.
+environment setup, trace collection, evaluation, and dataset export independent. Benchmark runners,
+model-provider harnesses, and audit gating do not belong here; downstream code uses only the public
+modules listed in the README. It needs the sibling `benchmark-audit-core` checkout (see the catalog
+README for the layout).
 
 The immutable raw object store is the source of truth. Never rewrite raw batches in place.
 Corrections produce a new canonical snapshot, and every exported dataset records its source

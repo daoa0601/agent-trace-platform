@@ -18,7 +18,9 @@ from pydantic import JsonValue
 
 from agenttrace.tasks.models import EnvironmentKind, EvaluatorSpec, TaskDefinition
 from agenttrace.tasks.samples import (
+    ParsedJson,
     TaskSample,
+    describe_schema_violation,
     json_text,
     load_task_samples,
     parse_json_output,
@@ -40,7 +42,7 @@ def _prompt(task: TaskDefinition, value: JsonValue) -> str:
     return render_task_prompt(task, value)
 
 
-def _parse_json_output(text: str) -> JsonValue | None:
+def _parse_json_output(text: str) -> ParsedJson | None:
     return parse_json_output(text)
 
 
@@ -50,7 +52,7 @@ def _expected(spec: EvaluatorSpec, task: TaskDefinition, target: Target) -> Json
         return configured
     parsed_target = _parse_json_output(target.text)
     if parsed_target is not None:
-        return parsed_target
+        return parsed_target.value
     return task.reference if task.reference is not None else target.text
 
 
@@ -62,7 +64,7 @@ def _evaluate_one(
 ) -> tuple[bool, str | None]:
     parsed = _parse_json_output(output_text)
     if spec.kind == "exact_match":
-        actual: JsonValue = parsed if parsed is not None else output_text.strip()
+        actual: JsonValue = parsed.value if parsed is not None else output_text
         expected = _expected(spec, task, target)
         if isinstance(actual, str) and isinstance(expected, str):
             if bool(spec.config.get("strip", True)):
@@ -75,12 +77,14 @@ def _evaluate_one(
             "values", spec.config.get("value", _expected(spec, task, target))
         )
         values = configured if isinstance(configured, list) else [configured]
+        # Non-string targets (including a parsed JSON null) are matched by their JSON text.
+        needles = [value if isinstance(value, str) else json_text(value) for value in values]
         case_sensitive = bool(spec.config.get("case_sensitive", False))
         haystack = output_text if case_sensitive else output_text.casefold()
         missing = [
-            str(value)
-            for value in values
-            if (str(value) if case_sensitive else str(value).casefold()) not in haystack
+            needle
+            for needle in needles
+            if (needle if case_sensitive else needle.casefold()) not in haystack
         ]
         return not missing, f"missing values: {missing}" if missing else None
     if spec.kind == "regex":
@@ -96,9 +100,13 @@ def _evaluate_one(
         if not isinstance(schema, dict):
             return False, "output schema is missing"
         try:
-            jsonschema.validate(parsed, schema)
+            jsonschema.validate(parsed.value, schema)
         except jsonschema.ValidationError as error:
-            return False, error.message
+            violation = describe_schema_violation(error)
+            return (
+                False,
+                f"{violation['validator']} failed at schema path {violation['schema_path']}",
+            )
         return True, None
     raise ValueError(f"unsupported Inspect evaluator: {spec.kind}")
 
@@ -140,6 +148,13 @@ def agenttrace_weighted_scorer(task_json: str) -> Scorer:
     return score
 
 
+def _sample_target(task: TaskDefinition, sample: InspectSample) -> JsonValue:
+    """The sample's own target, even an explicit null; otherwise the task reference."""
+    if "target" in sample.model_fields_set:
+        return sample.target
+    return task.reference if task.reference is not None else ""
+
+
 def build_inspect_task(
     task: TaskDefinition,
     samples: list[InspectSample],
@@ -168,13 +183,7 @@ def build_inspect_task(
         Sample(
             id=sample.sample_id,
             input=_prompt(task, sample.input),
-            target=_json_text(
-                sample.target
-                if sample.target is not None
-                else task.reference
-                if task.reference is not None
-                else ""
-            ),
+            target=_json_text(_sample_target(task, sample)),
             metadata={
                 **sample.metadata,
                 "agenttrace.task_id": task.task_id,

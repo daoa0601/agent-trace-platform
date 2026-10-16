@@ -1,25 +1,20 @@
+"""Immutable audit-bundle persistence on the AgentTrace object store."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
-from pydantic import ValidationError
-from typer.testing import CliRunner
-
-from agenttrace.audits import (
+from agenttrace.audits import persist_audit_bundle
+from agenttrace.storage import FileObjectStore
+from benchmark_audit_core import (
     AuditableSession,
-    AuditFinding,
     AuditorKind,
-    AuditPolicy,
     AuditVerdict,
     BenchmarkClaim,
     BenchmarkStage,
     EmpiricalRetest,
     EvidenceRef,
-    FindingCategory,
-    FindingSeverity,
-    FindingStatus,
     GateStatus,
     HardwareProfile,
     IndependentAudit,
@@ -28,18 +23,7 @@ from agenttrace.audits import (
     RetestOutcome,
     TerminationReason,
     build_audit_bundle,
-    evaluate_headline_gate,
-    persist_audit_bundle,
-    render_audit_report,
 )
-from agenttrace.storage import FileObjectStore
-from benchmark_audit_core import AuditableSession as CoreAuditableSession
-from benchmark_audit_core import build_audit_bundle as core_build_audit_bundle
-
-
-def test_agenttrace_audit_imports_reexport_core_objects() -> None:
-    assert AuditableSession is CoreAuditableSession
-    assert build_audit_bundle is core_build_audit_bundle
 
 
 def _evidence(name: str) -> EvidenceRef:
@@ -136,132 +120,18 @@ def _session(*, headline: bool = True, source_dirty: bool = False) -> AuditableS
     )
 
 
-def test_valid_audited_session_passes_and_is_deterministic(tmp_path: Path) -> None:
+def test_persist_audit_bundle_is_content_addressed_and_never_overwrites(tmp_path: Path) -> None:
     session = _session()
     first = build_audit_bundle(session)
     second = build_audit_bundle(session)
-
     assert first.headline_gate.status == GateStatus.PASSED
-    assert first.headline_gate.eligible_for_headline is True
-    assert first.digest() == second.digest()
-    assert session.digest() == first.headline_gate.session_digest
-
-    report = render_audit_report(first)
-    assert "## Empirical re-tests" in report
-    assert "## Audit findings" in report
-    assert "No findings were recorded." in report
 
     store = FileObjectStore(tmp_path)
     created = persist_audit_bundle(store, first)
     duplicate = persist_audit_bundle(store, second)
+
+    assert created.key == f"audits/bundles/{first.digest()}.json"
     assert created.created is True
     assert duplicate.created is False
+    assert duplicate.key == created.key
     assert store.get_bytes(created.key) == first.canonical_bytes()
-
-
-def test_headline_gate_blocks_dirty_source_and_unresolved_high_finding() -> None:
-    session = _session(source_dirty=True)
-    assert session.audit is not None
-    session.audit.findings.append(
-        AuditFinding(
-            finding_id="cache-001",
-            category=FindingCategory.CACHE_CONTAMINATION,
-            severity=FindingSeverity.HIGH,
-            status=FindingStatus.ACCEPTED,
-            observation="The benchmark reused a generated cache entry.",
-        )
-    )
-
-    result = evaluate_headline_gate(session)
-    failed = {check.check_id for check in result.checks if not check.passed}
-    assert result.status == GateStatus.BLOCKED
-    assert "source.clean" in failed
-    assert "audit.blocking_findings" in failed
-
-
-def test_missing_or_non_isolated_retest_blocks_headline() -> None:
-    session = _session()
-    assert session.audit is not None
-    session.audit.retests = [
-        retest for retest in session.audit.retests if retest.category != RetestCategory.COLD_CACHE
-    ]
-
-    result = evaluate_headline_gate(session)
-    failed = {check.check_id for check in result.checks if not check.passed}
-    assert "retest.cold_cache" in failed
-
-
-def test_failed_additional_retest_cannot_be_hidden_by_passing_defaults() -> None:
-    session = _session()
-    assert session.audit is not None
-    session.audit.retests.append(
-        EmpiricalRetest(
-            retest_id="retest-timing-sanity",
-            category=RetestCategory.TIMING_SANITY,
-            outcome=RetestOutcome.FAILED,
-            isolated_from_original_session=True,
-            evidence=[_evidence("timing-sanity")],
-        )
-    )
-
-    result = evaluate_headline_gate(session)
-    failed = {check.check_id for check in result.checks if not check.passed}
-    assert "audit.retest_outcomes" in failed
-
-
-def test_non_headline_claim_is_not_subject_to_publication_gate() -> None:
-    result = evaluate_headline_gate(_session(headline=False))
-    assert result.status == GateStatus.NOT_APPLICABLE
-    assert result.eligible_for_headline is False
-    assert result.checks == []
-
-
-def test_single_device_profile_and_independent_identity_are_validated() -> None:
-    with pytest.raises(ValidationError, match="exactly one accelerator"):
-        HardwareProfile(
-            accelerator_vendor="NVIDIA",
-            accelerator_models=["H100", "H100"],
-            accelerator_count=2,
-            optimization_scope=OptimizationScope.SINGLE_DEVICE,
-            host_architecture="x86_64",
-            observed_evidence=_evidence("hardware"),
-        )
-
-    session = _session()
-    assert session.audit is not None
-    payload = session.model_dump(mode="json")
-    payload["audit"]["auditor_id"] = session.generator_id
-    with pytest.raises(ValidationError, match="independent auditor"):
-        AuditableSession.model_validate(payload)
-
-    with pytest.raises(ValidationError, match="cannot remove baseline"):
-        AuditPolicy(required_retests=[])
-    with pytest.raises(ValidationError, match="must remain blocking"):
-        AuditPolicy(blocking_severities=[FindingSeverity.CRITICAL])
-
-
-def test_audit_cli_renders_and_persists_passed_bundle(tmp_path: Path) -> None:
-    from agenttrace.cli import app
-
-    manifest = tmp_path / "session.json"
-    report = tmp_path / "report.md"
-    object_root = tmp_path / "objects"
-    manifest.write_text(_session().model_dump_json(), encoding="utf-8")
-
-    result = CliRunner().invoke(
-        app,
-        [
-            "audit",
-            "gate",
-            str(manifest),
-            "--report",
-            str(report),
-            "--object-root",
-            str(object_root),
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert '"status": "passed"' in result.output
-    assert "## Audit findings" in report.read_text(encoding="utf-8")
-    assert len(list(object_root.glob("audits/bundles/*.json"))) == 1

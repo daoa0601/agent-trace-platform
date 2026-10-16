@@ -8,6 +8,16 @@ from typing import Literal, cast
 
 from pydantic import JsonValue
 
+__all__ = [
+    "EMAIL_PATTERN",
+    "PHONE_PATTERN",
+    "PRIVATE_REASONING_KEYS",
+    "SECRET_KEYS",
+    "SECRET_PATTERNS",
+    "RedactionStats",
+    "Redactor",
+]
+
 SECRET_KEYS = {
     "api_key",
     "apikey",

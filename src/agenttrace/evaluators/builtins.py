@@ -13,6 +13,7 @@ from agenttrace.evaluators.base import EvaluationContext, EvaluatorRegistry
 from agenttrace.models import Episode, EvaluationResult, StepType
 from agenttrace.storage.blobs import BlobStore
 from agenttrace.tasks.models import TaskDefinition
+from agenttrace.tasks.samples import describe_schema_violation
 
 
 def _result(
@@ -125,7 +126,7 @@ class JsonSchemaEvaluator:
                 context,
                 passed=False,
                 score=0.0,
-                details={"validation_error": error.message},
+                details=describe_schema_violation(error),
             )
         return _result(context, passed=True, score=1.0)
 

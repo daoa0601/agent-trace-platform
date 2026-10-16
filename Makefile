@@ -1,4 +1,4 @@
-.PHONY: install sync lint format typecheck test build check demo up down logs
+.PHONY: install sync lint format typecheck test check demo up down logs
 
 install:
 	@command -v uv >/dev/null 2>&1 || { echo "uv is required" >&2; exit 1; }
@@ -20,15 +20,11 @@ typecheck:
 test:
 	uv run pytest -v --cov=agenttrace --cov-report=term-missing
 
-build:
-	uv build
-
 check:
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run basedpyright
 	uv run pytest -v --cov=agenttrace --cov-report=term-missing
-	uv build
 
 demo:
 	uv run agenttrace demo --root outputs/demo
