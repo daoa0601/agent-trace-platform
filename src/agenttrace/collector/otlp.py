@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -116,21 +117,20 @@ def _step_type(span: Span, attributes: dict[str, JsonValue]) -> StepType:
     return StepType.AGENT_STATE
 
 
-MAX_STATUS_DESCRIPTION_BYTES = 256
+# Status descriptions are client-controlled. Only an error-code-shaped token (``tool_error``,
+# ``forward_incomplete``) is kept inline; exception messages, paths, and any other free text
+# could carry prompt or customer data past payload offloading, so they keep only size and digest.
+STATUS_CODE_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
 
 
 def _record_status_description(attributes: dict[str, JsonValue], message: str) -> str | None:
-    """Keep a short status description inline; reference a long one by digest only.
-
-    Status descriptions are meant to be error codes. Anything longer is free text that would
-    bypass payload offloading, so only its size and SHA-256 are kept.
-    """
+    """Keep an error-code status description inline; reference anything else by digest only."""
     if not message:
         return None
-    encoded = message.encode("utf-8")
-    if len(encoded) <= MAX_STATUS_DESCRIPTION_BYTES:
+    if STATUS_CODE_PATTERN.fullmatch(message):
         attributes["otel.status_description"] = message
         return message
+    encoded = message.encode("utf-8")
     attributes["otel.status_description_sha256"] = hashlib.sha256(encoded).hexdigest()
     attributes["otel.status_description_bytes"] = len(encoded)
     return None

@@ -148,6 +148,13 @@ def agenttrace_weighted_scorer(task_json: str) -> Scorer:
     return score
 
 
+def _sample_target(task: TaskDefinition, sample: InspectSample) -> JsonValue:
+    """The sample's own target, even an explicit null; otherwise the task reference."""
+    if "target" in sample.model_fields_set:
+        return sample.target
+    return task.reference if task.reference is not None else ""
+
+
 def build_inspect_task(
     task: TaskDefinition,
     samples: list[InspectSample],
@@ -176,13 +183,7 @@ def build_inspect_task(
         Sample(
             id=sample.sample_id,
             input=_prompt(task, sample.input),
-            target=_json_text(
-                sample.target
-                if sample.target is not None
-                else task.reference
-                if task.reference is not None
-                else ""
-            ),
+            target=_json_text(_sample_target(task, sample)),
             metadata={
                 **sample.metadata,
                 "agenttrace.task_id": task.task_id,

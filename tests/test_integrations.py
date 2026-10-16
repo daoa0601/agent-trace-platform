@@ -264,3 +264,22 @@ def test_inspect_contains_matches_a_null_target_by_its_json_text() -> None:
     contains = EvaluatorSpec(evaluator_id="mentions-null", kind="contains", version="1.0.0")
 
     assert _evaluate_one(contains, support, "the answer is null", Target("null")) == (True, None)
+
+
+def test_inspect_task_keeps_an_explicit_null_sample_target(tmp_path: Path) -> None:
+    from agenttrace.integrations.inspect_ai import build_inspect_task, load_inspect_samples
+    from agenttrace.tasks.samples import json_text
+
+    root = Path(__file__).resolve().parents[1]
+    support = load_task(root / "taskpacks/examples/support-routing.yaml")
+    path = tmp_path / "samples.jsonl"
+    path.write_text(
+        '{"sample_id": "explicit", "input": "hi", "target": null}\n'
+        '{"sample_id": "omitted", "input": "hi"}\n'
+    )
+
+    dataset = build_inspect_task(support, load_inspect_samples(path)).dataset
+    targets = {sample.id: sample.target for sample in dataset}
+
+    assert targets["explicit"] == "null"
+    assert targets["omitted"] == json_text(support.reference)

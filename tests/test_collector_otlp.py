@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.trace.v1.trace_pb2 import Status
@@ -226,4 +228,26 @@ def test_convert_otlp_references_long_status_descriptions_by_digest() -> None:
         event.attributes["otel.status_description_sha256"]
         == hashlib.sha256(b"x" * 100_000).hexdigest()
     )
+    assert event.tool is not None and event.tool.error_type == "error"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "customer Alice Smith was denied",
+        "KeyError: 'alice@example.test'",
+        "/Users/alice/private/repo",
+        "x" * 65,
+    ],
+)
+def test_convert_otlp_references_free_text_status_descriptions_by_digest(message: str) -> None:
+    request = make_otlp_request()
+    span = request.resource_spans[0].scope_spans[0].spans[0]
+    _add_string_attribute(span, "agenttrace.step.type", "tool_result")
+    span.status.code = Status.STATUS_CODE_ERROR
+    span.status.message = message
+
+    event = convert_otlp_request(request).events[0]
+    assert message not in json.dumps(event.model_dump(mode="json"))
+    assert event.attributes["otel.status_description_bytes"] == len(message.encode())
     assert event.tool is not None and event.tool.error_type == "error"
