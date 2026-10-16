@@ -116,6 +116,26 @@ def _step_type(span: Span, attributes: dict[str, JsonValue]) -> StepType:
     return StepType.AGENT_STATE
 
 
+MAX_STATUS_DESCRIPTION_BYTES = 256
+
+
+def _record_status_description(attributes: dict[str, JsonValue], message: str) -> str | None:
+    """Keep a short status description inline; reference a long one by digest only.
+
+    Status descriptions are meant to be error codes. Anything longer is free text that would
+    bypass payload offloading, so only its size and SHA-256 are kept.
+    """
+    if not message:
+        return None
+    encoded = message.encode("utf-8")
+    if len(encoded) <= MAX_STATUS_DESCRIPTION_BYTES:
+        attributes["otel.status_description"] = message
+        return message
+    attributes["otel.status_description_sha256"] = hashlib.sha256(encoded).hexdigest()
+    attributes["otel.status_description_bytes"] = len(encoded)
+    return None
+
+
 def _event_id(trace_id: str, span_id: str, end_nanos: int) -> str:
     digest = hashlib.sha256(f"{trace_id}:{span_id}:{end_nanos}".encode()).hexdigest()
     return f"evt_{digest[:32]}"
@@ -160,6 +180,12 @@ def convert_otlp_request(request: ExportTraceServiceRequest) -> EventBatch:
             inferred_sequence_by_trace[trace_id] = sequence_number + 1
             attributes["agenttrace.sequence.inferred"] = True
 
+        failed = span.status.code == 2
+        status_description: str | None = None
+        if failed:
+            # Keep the failure on every step type, not only tool interactions.
+            attributes["otel.status_code"] = "ERROR"
+            status_description = _record_status_description(attributes, span.status.message)
         step_type = _step_type(span, attributes)
         input_value = attributes.get("input.value", attributes.get("openinference.input.value"))
         output_value = attributes.get("output.value", attributes.get("openinference.output.value"))
@@ -196,7 +222,8 @@ def convert_otlp_request(request: ExportTraceServiceRequest) -> EventBatch:
                 name=_string(attributes, "tool.name") or span.name,
                 arguments=_content(input_value),
                 result=_content(output_value),
-                success=span.status.code != 2,
+                success=not failed,
+                error_type=(status_description or "error") if failed else None,
             )
 
         experiment_id = _string(attributes, "agenttrace.experiment.id") or "otel-default"

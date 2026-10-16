@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+from opentelemetry.proto.trace.v1.trace_pb2 import Status
 
 from agenttrace.collector.app import create_app
 from agenttrace.collector.otlp import convert_otlp_request
@@ -177,3 +178,52 @@ def test_collector_rejects_oversized_and_invalid_otlp(tmp_path: Path) -> None:
         headers={"Content-Type": "application/x-protobuf"},
     )
     assert invalid.status_code == 400
+
+
+def test_convert_otlp_preserves_failure_status_on_non_tool_spans() -> None:
+    request = make_otlp_request()
+    span = request.resource_spans[0].scope_spans[0].spans[0]
+    _add_string_attribute(span, "agenttrace.step.type", "agent_state")
+    span.status.code = Status.STATUS_CODE_ERROR
+    span.status.message = "forward_incomplete"
+
+    event = convert_otlp_request(request).events[0]
+    assert event.step_type == StepType.AGENT_STATE
+    assert event.attributes["otel.status_code"] == "ERROR"
+    assert event.attributes["otel.status_description"] == "forward_incomplete"
+
+    ok = convert_otlp_request(make_otlp_request()).events[0]
+    assert "otel.status_code" not in ok.attributes
+
+
+def test_convert_otlp_records_tool_error_type() -> None:
+    request = make_otlp_request()
+    span = request.resource_spans[0].scope_spans[0].spans[0]
+    _add_string_attribute(span, "agenttrace.step.type", "tool_result")
+    _add_string_attribute(span, "tool.name", "bash")
+    span.status.code = Status.STATUS_CODE_ERROR
+    span.status.message = "tool_error"
+
+    event = convert_otlp_request(request).events[0]
+    assert event.tool is not None
+    assert event.tool.success is False
+    assert event.tool.error_type == "tool_error"
+
+
+def test_convert_otlp_references_long_status_descriptions_by_digest() -> None:
+    import hashlib
+
+    request = make_otlp_request()
+    span = request.resource_spans[0].scope_spans[0].spans[0]
+    _add_string_attribute(span, "agenttrace.step.type", "tool_result")
+    span.status.code = Status.STATUS_CODE_ERROR
+    span.status.message = "x" * 100_000
+
+    event = convert_otlp_request(request).events[0]
+    assert "otel.status_description" not in event.attributes
+    assert event.attributes["otel.status_description_bytes"] == 100_000
+    assert (
+        event.attributes["otel.status_description_sha256"]
+        == hashlib.sha256(b"x" * 100_000).hexdigest()
+    )
+    assert event.tool is not None and event.tool.error_type == "error"

@@ -83,6 +83,8 @@ class SpanResult:
     cached_input_tokens: int | None = None
     reasoning_tokens: int | None = None
     cost_usd: float | None = None
+    error_type: str | None = None
+    """Set when the traced operation completed but reported failure; the span ends as ERROR."""
 
 
 _CURRENT_RUN: ContextVar[AgentRun | None] = ContextVar("agenttrace_current_run", default=None)
@@ -363,7 +365,10 @@ class AgentRun:
             for key, value in usage.items():
                 if value is not None:
                     span.set_attribute(key, value)
-            span.set_status(Status(StatusCode.OK))
+            if result.error_type is not None:
+                span.set_status(Status(StatusCode.ERROR, result.error_type))
+            else:
+                span.set_status(Status(StatusCode.OK))
 
     def benchmark_stage(
         self,

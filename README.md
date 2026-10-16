@@ -44,7 +44,7 @@ Code outside this repository should import only these modules:
 | `agenttrace.models` | canonical event, step, task-reference, and token-usage schemas |
 | `agenttrace.sdk` | `TraceClient` / `TraceSession` for native batched trace emission |
 | `agenttrace.integrations` | `create_telemetry`, `TelemetrySettings`, `CaptureMode`, `AgentRun`, `SpanResult` |
-| `agenttrace.tasks` | `TaskDefinition`, `EvaluatorSpec`, `TaskSample`, loaders, prompt rendering, JSON digests |
+| `agenttrace.tasks` | `TaskDefinition`, `EvaluatorSpec`, `TaskSample`, loaders, prompt rendering, JSON digests, `parse_json_output`, content-free error descriptions |
 | `agenttrace.storage` | `ObjectStore`, `FileObjectStore`, `S3ObjectStore`, `BlobStore`, `RawBatchWriter` |
 | `agenttrace.redaction` | `Redactor`, `RedactionStats`, and the shared secret/private-reasoning rules |
 | `agenttrace.audits` | `persist_audit_bundle(objects, bundle)` for immutable audit-bundle storage |

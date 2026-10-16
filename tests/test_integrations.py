@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 from pydantic import SecretStr
 
 from agenttrace.integrations.logging import JsonFormatter
@@ -125,6 +126,21 @@ def test_telemetry_metadata_disabled_and_error_paths() -> None:
         runtime.run(experiment_id="invalid", session_id="not\nprintable")
 
 
+def test_span_result_error_type_marks_a_completed_span_as_failed() -> None:
+    exporter = InMemorySpanExporter()
+    runtime = create_telemetry(TelemetrySettings(), span_exporter=exporter)
+    with runtime.run(experiment_id="exp_tool_error") as run:
+        with run.span("tool.failed", step_type="tool_call", kind="TOOL") as result:
+            result.error_type = "tool_error"
+        with run.span("tool.ok", step_type="tool_call", kind="TOOL"):
+            pass
+    runtime.close()
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert spans["tool.failed"].status.status_code == StatusCode.ERROR
+    assert spans["tool.failed"].status.description == "tool_error"
+    assert spans["tool.ok"].status.status_code == StatusCode.OK
+
+
 def test_telemetry_emits_explicit_benchmark_stages() -> None:
     exporter = InMemorySpanExporter()
     runtime = create_telemetry(
@@ -236,3 +252,15 @@ def test_inspect_adapter_builds_coding_and_non_coding_tasks(tmp_path: Path) -> N
     )
     with pytest.raises(ValueError, match="sandbox"):
         build_inspect_task(docker_task, [InspectSample(sample_id="one", input="hi")])
+
+
+def test_inspect_contains_matches_a_null_target_by_its_json_text() -> None:
+    from inspect_ai.scorer import Target
+
+    from agenttrace.integrations.inspect_ai import _evaluate_one
+
+    root = Path(__file__).resolve().parents[1]
+    support = load_task(root / "taskpacks/examples/support-routing.yaml")
+    contains = EvaluatorSpec(evaluator_id="mentions-null", kind="contains", version="1.0.0")
+
+    assert _evaluate_one(contains, support, "the answer is null", Target("null")) == (True, None)

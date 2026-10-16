@@ -80,3 +80,21 @@ def test_json_schema_reports_invalid_json(tmp_path, support_task) -> None:
     )[0]
     assert result.passed is False
     assert "invalid JSON" in str(result.details["validation_error"])
+
+
+def test_json_schema_violation_details_never_copy_the_output(tmp_path, support_task) -> None:
+    spec = EvaluatorSpec(
+        evaluator_id="schema",
+        kind="json_schema",
+        version="1.0.0",
+    )
+    task = support_task.model_copy(update={"evaluators": [spec]})
+    steps = make_valid_events(task, final_output='{"intent": "private-model-output"}')
+    result = evaluate_episode(
+        _episode(task, steps),
+        task,
+        BlobStore(FileObjectStore(tmp_path / "objects")),
+    )[0]
+    assert result.passed is False
+    assert result.details["validator"]
+    assert "private-model-output" not in str(result.details)
