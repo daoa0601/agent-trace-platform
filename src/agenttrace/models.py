@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from agenttrace.ids import new_id, new_span_id, new_trace_id
 
 TRACE_SCHEMA_VERSION = "1.0.0"
+# Bounds per-event attribute work at ingestion (OpenTelemetry SDKs default to 128 per span).
+MAX_EVENT_ATTRIBUTES = 512
 
 
 def utc_now() -> datetime:
@@ -258,6 +260,13 @@ class EventBatch(StrictModel):
             raise ValueError("one batch must contain one experiment and collection date")
         if len(event_ids) != len(set(event_ids)):
             raise ValueError("event_id values must be unique within a batch")
+        for event in self.events:
+            count = len(event.attributes) + len(event.offloaded_attributes or {})
+            if count > MAX_EVENT_ATTRIBUTES:
+                raise ValueError(
+                    f"event {event.event_id} has {count} attributes; "
+                    f"the limit is {MAX_EVENT_ATTRIBUTES}"
+                )
         return self
 
 

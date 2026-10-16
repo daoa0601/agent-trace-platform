@@ -13,7 +13,7 @@ from opentelemetry.proto.trace.v1.trace_pb2 import Status
 
 from agenttrace.collector.app import create_app
 from agenttrace.collector.otlp import convert_otlp_request
-from agenttrace.models import EventBatch, StepType
+from agenttrace.models import MAX_EVENT_ATTRIBUTES, EventBatch, StepType
 from agenttrace.settings import CollectorSettings
 from agenttrace.storage import BlobStore, FileObjectStore
 from agenttrace.storage.raw import decode_raw_batch
@@ -160,6 +160,23 @@ def test_otlp_http_endpoint_writes_native_raw_object(tmp_path: Path) -> None:
     keys = list(objects.list_keys("raw"))
     assert len(keys) == 1
     assert decode_raw_batch(objects.get_bytes(keys[0]))[0].experiment_id == "exp_otel"
+
+
+def test_otlp_endpoint_rejects_spans_with_too_many_attributes(tmp_path: Path) -> None:
+    objects = FileObjectStore(tmp_path / "objects")
+    settings = CollectorSettings(environment="test", object_root=tmp_path / "unused")
+    client = TestClient(create_app(settings, objects))
+    request = make_otlp_request()
+    span = request.resource_spans[0].scope_spans[0].spans[0]
+    for index in range(MAX_EVENT_ATTRIBUTES):
+        _add_int_attribute(span, f"tag.{index}", index)
+    response = client.post(
+        "/v1/otlp/v1/traces",
+        content=request.SerializeToString(),
+        headers={"Content-Type": "application/x-protobuf"},
+    )
+    assert response.status_code == 400
+    assert list(objects.list_keys("raw")) == []
 
 
 def test_otlp_endpoint_offloads_large_span_attributes(tmp_path: Path) -> None:

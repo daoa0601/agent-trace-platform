@@ -8,7 +8,7 @@ import pytest
 import zstandard
 from pydantic import JsonValue
 
-from agenttrace.models import Content, EventBatch, StepType
+from agenttrace.models import MAX_EVENT_ATTRIBUTES, Content, EventBatch, StepType
 from agenttrace.redaction import Redactor
 from agenttrace.storage import BlobStore, FileObjectStore, RawBatchWriter
 from agenttrace.storage.raw import decode_raw_batch
@@ -154,3 +154,27 @@ def test_trace_event_rejects_attribute_both_inline_and_offloaded(support_task) -
             attributes={"input.value": "x"},
             offloaded_attributes={"input.value": reference},
         )
+
+
+def test_raw_writer_does_not_offload_values_below_a_quarter_of_the_limit(
+    tmp_path, support_task
+) -> None:
+    store = FileObjectStore(tmp_path / "objects")
+    attributes: dict[str, JsonValue] = {f"tag.{index}": "v" * 8 for index in range(400)}
+    event = make_event(1, StepType.USER_INPUT, task=support_task, attributes=attributes)
+    writer = RawBatchWriter(store, inline_payload_bytes=256)
+    result = writer.write(EventBatch(worker_id="worker-a", events=[event]))
+    stored = decode_raw_batch(store.get_bytes(result.key))[0]
+    # Offloading tiny values one blob each would turn one request into hundreds of writes.
+    assert stored.offloaded_attributes is None
+    assert stored.attributes == attributes
+    assert list(store.list_keys("blobs")) == []
+
+
+def test_event_batch_rejects_events_with_too_many_attributes(support_task) -> None:
+    attributes: dict[str, JsonValue] = {
+        f"tag.{index}": index for index in range(MAX_EVENT_ATTRIBUTES + 1)
+    }
+    event = make_event(1, StepType.USER_INPUT, task=support_task, attributes=attributes)
+    with pytest.raises(ValueError, match="attributes"):
+        EventBatch(worker_id="worker-a", events=[event])

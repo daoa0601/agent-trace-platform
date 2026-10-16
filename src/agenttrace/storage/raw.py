@@ -77,16 +77,29 @@ class RawBatchWriter:
     def _offload_attributes(
         self, event: TraceEvent
     ) -> tuple[dict[str, JsonValue], dict[str, Content] | None]:
-        """Move attribute values to blobs, largest first, until the inline rest fits the limit."""
+        """Move attribute values to blobs, largest first, until the inline rest fits the limit.
+
+        Values under a quarter of the limit stay inline, so blob writes per request stay within a
+        small multiple of request size over the limit however many attributes a span carries.
+        """
+        limit = self.inline_payload_bytes
         inline = dict(event.attributes)
         offloaded = dict(event.offloaded_attributes or {})
         sizes = {key: len(canonical_json(value)) for key, value in inline.items()}
-        total = len(canonical_json(inline))
+        # canonical_json of the dict: braces, one '"key":value' entry each, commas between entries.
+        entries = {key: len(canonical_json(key)) + 1 + size for key, size in sizes.items()}
+        entry_total = sum(entries.values())
+
+        def inline_size() -> int:
+            return 2 + entry_total + max(len(inline) - 1, 0)
+
         for key in sorted(sizes, key=lambda name: (-sizes[name], name)):
-            if sizes[key] <= self.inline_payload_bytes and total <= self.inline_payload_bytes:
+            if sizes[key] <= limit and inline_size() <= limit:
+                break
+            if sizes[key] < limit // 4:
                 break
             offloaded[key] = self.blobs.put_json(inline.pop(key)).content
-            total = len(canonical_json(inline))
+            entry_total -= entries[key]
         return inline, offloaded or None
 
     def _offload_event(self, event: TraceEvent) -> TraceEvent:
