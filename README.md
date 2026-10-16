@@ -8,7 +8,7 @@ AgentTrace generalizes trace-collection ideas first prototyped in the frozen cou
 [`daoa0601/cs-e4645-data-intensive-computing`](https://github.com/daoa0601/cs-e4645-data-intensive-computing).
 
 This checkout needs the sibling `benchmark-audit-core` next to it; see
-[the catalog README](../../README.md#cross-repo-boundaries) for the layout and cross-repo boundaries.
+[the catalog README](https://github.com/daoa0601/agentic-orch/blob/main/README.md#cross-repo-boundaries) for the layout and cross-repo boundaries.
 
 ## What is ready
 

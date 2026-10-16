@@ -127,7 +127,7 @@ their task definition. The gate never infers a pass from missing evidence.
   that a digest is authentic or relevant to a claim, execute re-tests, redact content, or enforce
   retention. Harnesses and AgentTrace integrations own those controls.
 - AgentTrace stores traces and evidence; it does not route model requests. Which layer owns
-  retries and fallbacks is cross-repo policy in [the catalog README](../../../README.md#cross-repo-boundaries).
+  retries and fallbacks is cross-repo policy in [the catalog README](https://github.com/daoa0601/agentic-orch/blob/main/README.md#cross-repo-boundaries).
 - The collector records evidence; it does not decide benchmark correctness on the ingestion path.
 - A task-specific harness owns compilation, oracle checks, cache controls, and timing methodology.
 - An agent cannot self-attest independence, and changing reviewer identity alone is insufficient if
