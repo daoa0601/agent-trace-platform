@@ -9,6 +9,8 @@ from typing import Literal
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from agenttrace.models import MIN_INLINE_PAYLOAD_BYTES
+
 
 class CollectorSettings(BaseSettings):
     """Collector settings loaded from AGENTTRACE_* environment variables."""
@@ -29,7 +31,7 @@ class CollectorSettings(BaseSettings):
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
     max_request_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
-    inline_payload_bytes: int = Field(default=16 * 1024, ge=256)
+    inline_payload_bytes: int = Field(default=16 * 1024, ge=MIN_INLINE_PAYLOAD_BYTES)
     redaction_mode: Literal["off", "balanced", "strict"] = "balanced"
     log_level: str = "INFO"
 

@@ -8,9 +8,10 @@ import pytest
 import zstandard
 from pydantic import JsonValue
 
-from agenttrace.models import Content, EventBatch, StepType
+from agenttrace.models import MAX_EVENT_ATTRIBUTES, Content, EventBatch, StepType, blob_ref
 from agenttrace.redaction import Redactor
 from agenttrace.storage import BlobStore, FileObjectStore, RawBatchWriter
+from agenttrace.storage.objects import ObjectInfo
 from agenttrace.storage.raw import decode_raw_batch
 
 from .conftest import make_event
@@ -66,10 +67,10 @@ def test_raw_writer_redacts_offloads_and_is_retry_safe(tmp_path, support_task) -
         1,
         StepType.USER_INPUT,
         task=support_task,
-        input={"password": "do-not-store", "text": "x" * 200},
+        input={"password": "do-not-store", "text": "x" * 400},
     )
     batch = EventBatch(worker_id="worker-a", events=[event])
-    writer = RawBatchWriter(store, inline_payload_bytes=64, redactor=Redactor("balanced"))
+    writer = RawBatchWriter(store, inline_payload_bytes=256, redactor=Redactor("balanced"))
     first = writer.write(batch)
     second = writer.write(batch)
     assert first.key == second.key
@@ -86,3 +87,160 @@ def test_content_requires_digest_for_reference() -> None:
         Content(ref="object://missing")
     with pytest.raises(ValueError, match="not both"):
         Content(inline="x", ref="object://x", sha256="a" * 64)
+
+
+def test_raw_writer_offloads_oversized_attributes_after_redaction(tmp_path, support_task) -> None:
+    store = FileObjectStore(tmp_path / "objects")
+    prompt = "summarize sk-abcdefghijklmnopqrstuv " + "y" * 400
+    event = make_event(
+        1,
+        StepType.USER_INPUT,
+        task=support_task,
+        attributes={"status": "running", "llm.input_messages.0.message.content": prompt},
+    )
+    writer = RawBatchWriter(store, inline_payload_bytes=256)
+    result = writer.write(EventBatch(worker_id="worker-a", events=[event]))
+    raw = zstandard.ZstdDecompressor().decompress(store.get_bytes(result.key))
+    assert b"y" * 400 not in raw
+    stored = decode_raw_batch(store.get_bytes(result.key))[0]
+    assert stored.attributes == {"status": "running"}
+    assert stored.offloaded_attributes is not None
+    reference = stored.offloaded_attributes["llm.input_messages.0.message.content"]
+    restored = cast(str, BlobStore(store).get_json(reference))
+    assert restored.startswith("summarize [REDACTED_SECRET] ")
+    assert result.redactions.secret_values == 1
+
+
+def test_raw_writer_bounds_total_inline_attribute_size(tmp_path, support_task) -> None:
+    store = FileObjectStore(tmp_path / "objects")
+    attributes: dict[str, JsonValue] = {
+        f"llm.input_messages.{index}.message.content": str(index) * (100 + index)
+        for index in range(5)
+    }
+    attributes["status"] = "running"
+    event = make_event(1, StepType.USER_INPUT, task=support_task, attributes=attributes)
+    writer = RawBatchWriter(store, inline_payload_bytes=256)
+    result = writer.write(EventBatch(worker_id="worker-a", events=[event]))
+    stored = decode_raw_batch(store.get_bytes(result.key))[0]
+    assert stored.offloaded_attributes is not None
+    # No single value is over the limit, but together they are. Largest values move first, so the
+    # smallest message stays inline with the status flag.
+    assert set(stored.offloaded_attributes) == {
+        f"llm.input_messages.{index}.message.content" for index in (1, 2, 3, 4)
+    }
+    assert set(stored.attributes) == {"status", "llm.input_messages.0.message.content"}
+    blobs = BlobStore(store)
+    for key, reference in stored.offloaded_attributes.items():
+        assert blobs.get_json(reference) == attributes[key]
+
+
+def test_raw_writer_keeps_small_attributes_inline(tmp_path, support_task) -> None:
+    store = FileObjectStore(tmp_path / "objects")
+    event = make_event(1, StepType.USER_INPUT, task=support_task, attributes={"status": "ok"})
+    result = RawBatchWriter(store).write(EventBatch(worker_id="worker-a", events=[event]))
+    stored = decode_raw_batch(store.get_bytes(result.key))[0]
+    assert stored.attributes == {"status": "ok"}
+    assert stored.offloaded_attributes is None
+    raw = zstandard.ZstdDecompressor().decompress(store.get_bytes(result.key))
+    assert b"offloaded_attributes" not in raw
+
+
+def test_trace_event_rejects_attribute_both_inline_and_offloaded(support_task) -> None:
+    reference = Content(ref=blob_ref("a" * 64), sha256="a" * 64)
+    with pytest.raises(ValueError, match="both inline and offloaded"):
+        make_event(
+            1,
+            StepType.USER_INPUT,
+            task=support_task,
+            attributes={"input.value": "x"},
+            offloaded_attributes={"input.value": reference},
+        )
+
+
+def test_raw_writer_does_not_offload_values_below_a_quarter_of_the_limit(
+    tmp_path, support_task
+) -> None:
+    store = FileObjectStore(tmp_path / "objects")
+    attributes: dict[str, JsonValue] = {f"tag.{index}": "v" * 8 for index in range(400)}
+    event = make_event(1, StepType.USER_INPUT, task=support_task, attributes=attributes)
+    writer = RawBatchWriter(store, inline_payload_bytes=256)
+    result = writer.write(EventBatch(worker_id="worker-a", events=[event]))
+    stored = decode_raw_batch(store.get_bytes(result.key))[0]
+    # Offloading tiny values one blob each would turn one request into hundreds of writes.
+    assert stored.offloaded_attributes is None
+    assert stored.attributes == attributes
+    assert list(store.list_keys("blobs")) == []
+
+
+def test_event_batch_rejects_events_with_too_many_attributes(support_task) -> None:
+    attributes: dict[str, JsonValue] = {
+        f"tag.{index}": index for index in range(MAX_EVENT_ATTRIBUTES + 1)
+    }
+    event = make_event(1, StepType.USER_INPUT, task=support_task, attributes=attributes)
+    with pytest.raises(ValueError, match="attributes"):
+        EventBatch(worker_id="worker-a", events=[event])
+
+
+class CountingStore(FileObjectStore):
+    def __init__(self, root) -> None:
+        super().__init__(root)
+        self.blob_puts = 0
+
+    def put_bytes(self, key: str, data: bytes, **options) -> ObjectInfo:
+        if key.startswith("blobs/"):
+            self.blob_puts += 1
+        return super().put_bytes(key, data, **options)
+
+
+def test_raw_writer_writes_a_shared_attribute_once_per_batch(tmp_path, support_task) -> None:
+    store = CountingStore(tmp_path / "objects")
+    shared = {"service.description": "s" * 300}
+    events = [
+        make_event(index, StepType.USER_INPUT, task=support_task, attributes=dict(shared))
+        for index in range(1, 6)
+    ]
+    RawBatchWriter(store, inline_payload_bytes=256).write(
+        EventBatch(worker_id="worker-a", events=events)
+    )
+    assert store.blob_puts == 1
+
+
+def test_event_batch_rejects_client_supplied_attribute_references(support_task) -> None:
+    reference = Content(ref=blob_ref("a" * 64), sha256="a" * 64)
+    event = make_event(
+        1,
+        StepType.EPISODE_END,
+        task=support_task,
+        attributes={},
+        offloaded_attributes={"status": reference},
+    )
+    # Readers see only inline attributes, and redaction cannot rewrite a referenced secret.
+    with pytest.raises(ValueError, match="set by the collector"):
+        EventBatch(worker_id="worker-a", events=[event])
+
+
+def test_trace_event_rejects_attribute_reference_that_does_not_match_its_digest(
+    support_task,
+) -> None:
+    forged = Content(ref=blob_ref("b" * 64), sha256="a" * 64)
+    with pytest.raises(ValueError, match="blob of their digest"):
+        make_event(
+            1,
+            StepType.USER_INPUT,
+            task=support_task,
+            attributes={},
+            offloaded_attributes={"input.value": forged},
+        )
+
+
+def test_raw_writer_keeps_terminal_status_inline(tmp_path, support_task) -> None:
+    store = FileObjectStore(tmp_path / "objects")
+    with pytest.raises(ValueError, match="at least 256"):
+        RawBatchWriter(store, inline_payload_bytes=16)
+    status = "failed"
+    attributes: dict[str, JsonValue] = {"status": status, "detail": "d" * 600}
+    event = make_event(1, StepType.EPISODE_END, task=support_task, attributes=attributes)
+    writer = RawBatchWriter(store, inline_payload_bytes=256)
+    result = writer.write(EventBatch(worker_id="worker-a", events=[event]))
+    stored = decode_raw_batch(store.get_bytes(result.key))[0]
+    assert stored.attributes == {"status": status}

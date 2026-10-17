@@ -6,6 +6,14 @@ The collector performs bounded work only: authenticate, validate, redact, offloa
 compress, and append. It does not join history, execute evaluators, update rewards, or build episodes.
 This makes a retry safe and keeps collection latency independent of task complexity.
 
+Offloading applies to free-form attributes as well as typed content. OTLP instrumentation often puts
+prompts and responses in span attributes (`input.value`, `llm.input_messages.*`). When a value, or
+the event's attributes together, exceed `inline_payload_bytes`, the largest values move to the blob
+store and the event lists them under `offloaded_attributes` by reference. Values under a quarter of
+the limit stay inline, and an event may carry at most 512 attributes, so one request causes a
+bounded number of blob writes. Only the collector sets `offloaded_attributes`; ingestion rejects
+events that already carry it.
+
 Raw object storage is the audit source of truth. A canonical snapshot is a deterministic projection of
 a set of raw object digests. An episode snapshot is a deterministic projection of a canonical manifest.
 Evaluation and consumer datasets repeat that pattern. A trainer or benchmark records one frozen

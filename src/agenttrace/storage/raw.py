@@ -6,10 +6,11 @@ import hashlib
 from dataclasses import dataclass
 
 import zstandard
+from pydantic import JsonValue
 
-from agenttrace.models import Content, EventBatch, TraceEvent
+from agenttrace.models import MIN_INLINE_PAYLOAD_BYTES, Content, EventBatch, TraceEvent
 from agenttrace.redaction import RedactionStats, Redactor
-from agenttrace.storage.blobs import BlobStore
+from agenttrace.storage.blobs import BlobStore, canonical_json
 from agenttrace.storage.objects import ObjectStore
 
 
@@ -33,6 +34,8 @@ class RawBatchWriter:
         inline_payload_bytes: int = 16 * 1024,
         redactor: Redactor | None = None,
     ) -> None:
+        if inline_payload_bytes < MIN_INLINE_PAYLOAD_BYTES:
+            raise ValueError(f"inline_payload_bytes must be at least {MIN_INLINE_PAYLOAD_BYTES}")
         self.objects = objects
         self.blobs = BlobStore(objects)
         self.inline_payload_bytes = inline_payload_bytes
@@ -42,11 +45,13 @@ class RawBatchWriter:
     def write(self, batch: EventBatch) -> RawWriteResult:
         events: list[TraceEvent] = []
         total_stats = RedactionStats()
+        # OTLP copies resource attributes onto every span; write each distinct value once.
+        attribute_blobs: dict[bytes, Content] = {}
         for event in batch.events:
             cleaned_payload, stats = self.redactor.redact(event.model_dump(mode="json"))
             total_stats = total_stats.add(stats)
             cleaned = TraceEvent.model_validate(cleaned_payload)
-            events.append(self._offload_event(cleaned))
+            events.append(self._offload_event(cleaned, attribute_blobs))
 
         lines = [event.model_dump_json(exclude_none=True) for event in events]
         raw = ("\n".join(lines) + "\n").encode("utf-8")
@@ -73,8 +78,45 @@ class RawBatchWriter:
             event_ids=[event.event_id for event in events],
         )
 
-    def _offload_event(self, event: TraceEvent) -> TraceEvent:
+    def _offload_attributes(
+        self, event: TraceEvent, blobs_by_value: dict[bytes, Content]
+    ) -> tuple[dict[str, JsonValue], dict[str, Content] | None]:
+        """Move attribute values to blobs, largest first, until the inline rest fits the limit.
+
+        Values under a quarter of the limit stay inline, so blob writes per request stay within a
+        small multiple of request size over the limit however many attributes a span carries.
+        """
+        limit = self.inline_payload_bytes
+        inline = dict(event.attributes)
+        offloaded = dict(event.offloaded_attributes or {})
+        encoded = {key: canonical_json(value) for key, value in inline.items()}
+        sizes = {key: len(raw) for key, raw in encoded.items()}
+        # canonical_json of the dict: braces, one '"key":value' entry each, commas between entries.
+        entries = {key: len(canonical_json(key)) + 1 + size for key, size in sizes.items()}
+        entry_total = sum(entries.values())
+
+        def inline_size() -> int:
+            return 2 + entry_total + max(len(inline) - 1, 0)
+
+        for key in sorted(sizes, key=lambda name: (-sizes[name], name)):
+            if sizes[key] <= limit and inline_size() <= limit:
+                break
+            if sizes[key] < limit // 4:
+                break
+            value = inline.pop(key)
+            if encoded[key] not in blobs_by_value:
+                blobs_by_value[encoded[key]] = self.blobs.put_json(value).content
+            offloaded[key] = blobs_by_value[encoded[key]]
+            entry_total -= entries[key]
+        return inline, offloaded or None
+
+    def _offload_event(
+        self, event: TraceEvent, attribute_blobs: dict[bytes, Content]
+    ) -> TraceEvent:
         updates: dict[str, object] = {}
+        updates["attributes"], updates["offloaded_attributes"] = self._offload_attributes(
+            event, attribute_blobs
+        )
         for field_name in ("input", "output"):
             content = getattr(event, field_name)
             updates[field_name] = self.blobs.maybe_offload(content, self.inline_payload_bytes)

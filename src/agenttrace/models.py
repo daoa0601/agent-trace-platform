@@ -12,6 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from agenttrace.ids import new_id, new_span_id, new_trace_id
 
 TRACE_SCHEMA_VERSION = "1.0.0"
+# Bounds per-event attribute work at ingestion (OpenTelemetry SDKs default to 128 per span).
+MAX_EVENT_ATTRIBUTES = 512
+# The raw writer keeps values under a quarter of its inline limit inline, so this floor keeps short
+# flags that batch readers depend on, such as an episode's terminal status, out of the blob store.
+MIN_INLINE_PAYLOAD_BYTES = 256
 
 
 def utc_now() -> datetime:
@@ -64,6 +69,11 @@ class PrivacyLevel(StrEnum):
     INTERNAL = "internal"
     CONFIDENTIAL = "confidential"
     RESTRICTED = "restricted"
+
+
+def blob_ref(sha256: str) -> str:
+    """Return the content-addressed object reference for a JSON blob digest."""
+    return f"object://blobs/sha256/{sha256[:2]}/{sha256}.json.zst"
 
 
 class Content(StrictModel):
@@ -218,6 +228,8 @@ class TraceEvent(StrictModel):
     provenance: Provenance = Field(default_factory=Provenance)
     privacy: Privacy = Field(default_factory=Privacy)
     attributes: dict[str, JsonValue] = Field(default_factory=dict)
+    # Attribute values too large to keep inline, moved to the blob store by the raw writer.
+    offloaded_attributes: dict[str, Content] | None = None
 
     @model_validator(mode="after")
     def validate_timestamps_and_shape(self) -> TraceEvent:
@@ -232,7 +244,29 @@ class TraceEvent(StrictModel):
             raise ValueError("reward steps must include reward data")
         if self.step_type in {StepType.TOOL_CALL, StepType.TOOL_RESULT} and self.tool is None:
             raise ValueError("tool steps must include tool data")
+        if self.offloaded_attributes:
+            # Duplicate detection trusts these digests, so each ref must be the blob they name.
+            if any(
+                content.sha256 is None or content.ref != blob_ref(content.sha256)
+                for content in self.offloaded_attributes.values()
+            ):
+                raise ValueError("offloaded attributes must reference the blob of their digest")
+            overlap = sorted(self.attributes.keys() & self.offloaded_attributes.keys())
+            if overlap:
+                raise ValueError(f"attributes cannot be both inline and offloaded: {overlap}")
         return self
+
+
+def check_ingestible(event: TraceEvent) -> None:
+    """Raise ValueError if the collector would reject this event in any batch."""
+    if event.offloaded_attributes is not None:
+        # Readers see only inline attributes, and redaction cannot rewrite a referenced value.
+        raise ValueError(f"event {event.event_id}: offloaded_attributes is set by the collector")
+    count = len(event.attributes)
+    if count > MAX_EVENT_ATTRIBUTES:
+        raise ValueError(
+            f"event {event.event_id} has {count} attributes; the limit is {MAX_EVENT_ATTRIBUTES}"
+        )
 
 
 class EventBatch(StrictModel):
@@ -250,6 +284,8 @@ class EventBatch(StrictModel):
             raise ValueError("one batch must contain one experiment and collection date")
         if len(event_ids) != len(set(event_ids)):
             raise ValueError("event_id values must be unique within a batch")
+        for event in self.events:
+            check_ingestible(event)
         return self
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from agenttrace.models import EventBatch, StepType, TaskRef
+from agenttrace.models import MAX_EVENT_ATTRIBUTES, EventBatch, StepType, TaskRef
 from agenttrace.sdk import TraceClient
 
 from .conftest import make_event
@@ -118,3 +118,28 @@ def test_client_flushes_when_partition_changes(support_task) -> None:
     client.record(second)
     client.flush()
     assert [batch.events[0].experiment_id for batch in captured] == ["exp_test", "exp_second"]
+
+
+def test_client_rejects_oversized_event_without_blocking_later_flushes(support_task) -> None:
+    captured: list[EventBatch] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(EventBatch.model_validate_json(request.content))
+        return _success_response(request)
+
+    client = TraceClient(
+        "http://collector",
+        batch_size=100,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    oversized = make_event(
+        1,
+        StepType.USER_INPUT,
+        task=support_task,
+        attributes={f"tag.{index}": index for index in range(MAX_EVENT_ATTRIBUTES + 1)},
+    )
+    with pytest.raises(ValueError, match="attributes"):
+        client.record(oversized)
+    client.record(make_event(2, StepType.USER_INPUT, task=support_task))
+    client.flush()
+    assert [event.sequence_number for batch in captured for event in batch.events] == [2]
