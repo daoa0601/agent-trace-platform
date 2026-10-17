@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import zstandard
 from pydantic import JsonValue
 
-from agenttrace.models import Content
+from agenttrace.models import Content, blob_ref
 from agenttrace.storage.objects import ObjectStore
 
 
@@ -39,7 +39,8 @@ class BlobStore:
     def put_json(self, value: JsonValue, *, redacted: bool = False) -> BlobWriteResult:
         raw = canonical_json(value)
         digest = hashlib.sha256(raw).hexdigest()
-        key = f"blobs/sha256/{digest[:2]}/{digest}.json.zst"
+        ref = blob_ref(digest)
+        key = ref.removeprefix("object://")
         compressed = self._compressor.compress(raw)
         info = self.objects.put_bytes(
             key,
@@ -49,7 +50,7 @@ class BlobStore:
         )
         return BlobWriteResult(
             content=Content(
-                ref=f"object://{key}",
+                ref=ref,
                 sha256=digest,
                 media_type="application/json",
                 byte_size=len(raw),

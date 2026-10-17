@@ -8,7 +8,7 @@ import pytest
 import zstandard
 from pydantic import JsonValue
 
-from agenttrace.models import MAX_EVENT_ATTRIBUTES, Content, EventBatch, StepType
+from agenttrace.models import MAX_EVENT_ATTRIBUTES, Content, EventBatch, StepType, blob_ref
 from agenttrace.redaction import Redactor
 from agenttrace.storage import BlobStore, FileObjectStore, RawBatchWriter
 from agenttrace.storage.objects import ObjectInfo
@@ -146,7 +146,7 @@ def test_raw_writer_keeps_small_attributes_inline(tmp_path, support_task) -> Non
 
 
 def test_trace_event_rejects_attribute_both_inline_and_offloaded(support_task) -> None:
-    reference = Content(ref="object://blobs/x.json.zst", sha256="a" * 64)
+    reference = Content(ref=blob_ref("a" * 64), sha256="a" * 64)
     with pytest.raises(ValueError, match="both inline and offloaded"):
         make_event(
             1,
@@ -203,3 +203,31 @@ def test_raw_writer_writes_a_shared_attribute_once_per_batch(tmp_path, support_t
         EventBatch(worker_id="worker-a", events=events)
     )
     assert store.blob_puts == 1
+
+
+def test_event_batch_rejects_client_supplied_attribute_references(support_task) -> None:
+    reference = Content(ref=blob_ref("a" * 64), sha256="a" * 64)
+    event = make_event(
+        1,
+        StepType.EPISODE_END,
+        task=support_task,
+        attributes={},
+        offloaded_attributes={"status": reference},
+    )
+    # Readers see only inline attributes, and redaction cannot rewrite a referenced secret.
+    with pytest.raises(ValueError, match="set by the collector"):
+        EventBatch(worker_id="worker-a", events=[event])
+
+
+def test_trace_event_rejects_attribute_reference_that_does_not_match_its_digest(
+    support_task,
+) -> None:
+    forged = Content(ref=blob_ref("b" * 64), sha256="a" * 64)
+    with pytest.raises(ValueError, match="blob of their digest"):
+        make_event(
+            1,
+            StepType.USER_INPUT,
+            task=support_task,
+            attributes={},
+            offloaded_attributes={"input.value": forged},
+        )

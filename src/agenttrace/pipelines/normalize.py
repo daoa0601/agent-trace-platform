@@ -245,7 +245,12 @@ def normalize_raw_traces(
             item[0].event_id,
         )
     )
-    config = {"raw_prefix": raw_prefix, "strict_references": strict_references}
+    config = {
+        "raw_prefix": raw_prefix,
+        "strict_references": strict_references,
+        # Names the duplicate rule so a rule change yields a new snapshot, not a stale reuse.
+        "duplicate_comparison": "attribute-digests",
+    }
     snapshot_id = make_snapshot_id("canonical", source_digests, config)
     prefix = f"canonical/snapshots/{snapshot_id}"
     rows = [event_to_row(event, key) for event, key in events]

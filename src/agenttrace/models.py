@@ -68,6 +68,11 @@ class PrivacyLevel(StrEnum):
     RESTRICTED = "restricted"
 
 
+def blob_ref(sha256: str) -> str:
+    """Return the content-addressed object reference for a JSON blob digest."""
+    return f"object://blobs/sha256/{sha256[:2]}/{sha256}.json.zst"
+
+
 class Content(StrictModel):
     """Inline content or a reference to a content-addressed object."""
 
@@ -237,8 +242,12 @@ class TraceEvent(StrictModel):
         if self.step_type in {StepType.TOOL_CALL, StepType.TOOL_RESULT} and self.tool is None:
             raise ValueError("tool steps must include tool data")
         if self.offloaded_attributes:
-            if any(content.ref is None for content in self.offloaded_attributes.values()):
-                raise ValueError("offloaded attributes must be object references")
+            # Duplicate detection trusts these digests, so each ref must be the blob they name.
+            if any(
+                content.sha256 is None or content.ref != blob_ref(content.sha256)
+                for content in self.offloaded_attributes.values()
+            ):
+                raise ValueError("offloaded attributes must reference the blob of their digest")
             overlap = sorted(self.attributes.keys() & self.offloaded_attributes.keys())
             if overlap:
                 raise ValueError(f"attributes cannot be both inline and offloaded: {overlap}")
@@ -247,7 +256,10 @@ class TraceEvent(StrictModel):
 
 def check_ingestible(event: TraceEvent) -> None:
     """Raise ValueError if the collector would reject this event in any batch."""
-    count = len(event.attributes) + len(event.offloaded_attributes or {})
+    if event.offloaded_attributes is not None:
+        # Readers see only inline attributes, and redaction cannot rewrite a referenced value.
+        raise ValueError(f"event {event.event_id}: offloaded_attributes is set by the collector")
+    count = len(event.attributes)
     if count > MAX_EVENT_ATTRIBUTES:
         raise ValueError(
             f"event {event.event_id} has {count} attributes; the limit is {MAX_EVENT_ATTRIBUTES}"
