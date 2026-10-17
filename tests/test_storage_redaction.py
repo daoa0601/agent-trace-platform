@@ -67,10 +67,10 @@ def test_raw_writer_redacts_offloads_and_is_retry_safe(tmp_path, support_task) -
         1,
         StepType.USER_INPUT,
         task=support_task,
-        input={"password": "do-not-store", "text": "x" * 200},
+        input={"password": "do-not-store", "text": "x" * 400},
     )
     batch = EventBatch(worker_id="worker-a", events=[event])
-    writer = RawBatchWriter(store, inline_payload_bytes=64, redactor=Redactor("balanced"))
+    writer = RawBatchWriter(store, inline_payload_bytes=256, redactor=Redactor("balanced"))
     first = writer.write(batch)
     second = writer.write(batch)
     assert first.key == second.key
@@ -231,3 +231,16 @@ def test_trace_event_rejects_attribute_reference_that_does_not_match_its_digest(
             attributes={},
             offloaded_attributes={"input.value": forged},
         )
+
+
+def test_raw_writer_keeps_terminal_status_inline(tmp_path, support_task) -> None:
+    store = FileObjectStore(tmp_path / "objects")
+    with pytest.raises(ValueError, match="at least 256"):
+        RawBatchWriter(store, inline_payload_bytes=16)
+    status = "failed"
+    attributes: dict[str, JsonValue] = {"status": status, "detail": "d" * 600}
+    event = make_event(1, StepType.EPISODE_END, task=support_task, attributes=attributes)
+    writer = RawBatchWriter(store, inline_payload_bytes=256)
+    result = writer.write(EventBatch(worker_id="worker-a", events=[event]))
+    stored = decode_raw_batch(store.get_bytes(result.key))[0]
+    assert stored.attributes == {"status": status}

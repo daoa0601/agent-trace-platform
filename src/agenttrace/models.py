@@ -14,6 +14,9 @@ from agenttrace.ids import new_id, new_span_id, new_trace_id
 TRACE_SCHEMA_VERSION = "1.0.0"
 # Bounds per-event attribute work at ingestion (OpenTelemetry SDKs default to 128 per span).
 MAX_EVENT_ATTRIBUTES = 512
+# The raw writer keeps values under a quarter of its inline limit inline, so this floor keeps short
+# flags that batch readers depend on, such as an episode's terminal status, out of the blob store.
+MIN_INLINE_PAYLOAD_BYTES = 256
 
 
 def utc_now() -> datetime:

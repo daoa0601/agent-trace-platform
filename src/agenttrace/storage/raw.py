@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import zstandard
 from pydantic import JsonValue
 
-from agenttrace.models import Content, EventBatch, TraceEvent
+from agenttrace.models import MIN_INLINE_PAYLOAD_BYTES, Content, EventBatch, TraceEvent
 from agenttrace.redaction import RedactionStats, Redactor
 from agenttrace.storage.blobs import BlobStore, canonical_json
 from agenttrace.storage.objects import ObjectStore
@@ -34,6 +34,8 @@ class RawBatchWriter:
         inline_payload_bytes: int = 16 * 1024,
         redactor: Redactor | None = None,
     ) -> None:
+        if inline_payload_bytes < MIN_INLINE_PAYLOAD_BYTES:
+            raise ValueError(f"inline_payload_bytes must be at least {MIN_INLINE_PAYLOAD_BYTES}")
         self.objects = objects
         self.blobs = BlobStore(objects)
         self.inline_payload_bytes = inline_payload_bytes

@@ -117,7 +117,7 @@ def write_valid_batch(
     final_output: JsonValue | None = None,
 ) -> list[TraceEvent]:
     events = make_valid_events(task, final_output=final_output)
-    RawBatchWriter(objects, inline_payload_bytes=128).write(
+    RawBatchWriter(objects, inline_payload_bytes=256).write(
         EventBatch(worker_id="pytest", events=events)
     )
     return events
