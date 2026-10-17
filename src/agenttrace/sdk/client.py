@@ -11,7 +11,15 @@ from typing import TYPE_CHECKING
 import httpx
 
 from agenttrace.ids import new_id
-from agenttrace.models import EventBatch, IngestResponse, Privacy, Provenance, TaskRef, TraceEvent
+from agenttrace.models import (
+    EventBatch,
+    IngestResponse,
+    Privacy,
+    Provenance,
+    TaskRef,
+    TraceEvent,
+    check_ingestible,
+)
 
 if TYPE_CHECKING:
     from agenttrace.sdk.session import TraceSession
@@ -55,6 +63,8 @@ class TraceClient:
 
     def record(self, event: TraceEvent) -> IngestResponse | None:
         """Buffer an event and flush when the configured batch size is reached."""
+        # Reject here: a buffered event the collector refuses would fail every later flush.
+        check_ingestible(event)
         with self._lock:
             if self._buffer:
                 first = self._buffer[0]

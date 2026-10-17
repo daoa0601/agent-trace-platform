@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import defaultdict
 from collections.abc import Iterable
@@ -19,6 +20,7 @@ from agenttrace.pipelines.snapshots import (
     put_manifest,
     put_parquet,
 )
+from agenttrace.storage.blobs import canonical_json
 from agenttrace.storage.objects import ObjectStore
 
 
@@ -88,6 +90,22 @@ def event_to_row(event: TraceEvent, source_key: str) -> dict[str, object]:
     row.update(_content_columns("input", event.input))
     row.update(_content_columns("output", event.output))
     return row
+
+
+def _logical_json(event: TraceEvent) -> str:
+    """Event JSON that is equal whether or not the raw writer offloaded its attributes."""
+    payload = event.model_dump(
+        mode="json", exclude_none=True, exclude={"attributes", "offloaded_attributes"}
+    )
+    digests: dict[str, str | None] = {
+        key: hashlib.sha256(canonical_json(value)).hexdigest()
+        for key, value in event.attributes.items()
+    }
+    digests.update(
+        {key: content.sha256 for key, content in (event.offloaded_attributes or {}).items()}
+    )
+    payload["attribute_sha256"] = digests
+    return json.dumps(payload, sort_keys=True)
 
 
 def _referenced_contents(event: TraceEvent) -> Iterable[Content]:
@@ -169,7 +187,8 @@ def normalize_raw_traces(
             existing = candidates.get(event.event_id)
             if existing is not None:
                 duplicate_count += 1
-                if existing[2] != canonical:
+                # Raw batches written before attribute offloading keep large values inline.
+                if existing[2] != canonical and _logical_json(existing[0]) != _logical_json(event):
                     conflicts.add(event.event_id)
                     quarantine.append(
                         {

@@ -245,6 +245,15 @@ class TraceEvent(StrictModel):
         return self
 
 
+def check_ingestible(event: TraceEvent) -> None:
+    """Raise ValueError if the collector would reject this event in any batch."""
+    count = len(event.attributes) + len(event.offloaded_attributes or {})
+    if count > MAX_EVENT_ATTRIBUTES:
+        raise ValueError(
+            f"event {event.event_id} has {count} attributes; the limit is {MAX_EVENT_ATTRIBUTES}"
+        )
+
+
 class EventBatch(StrictModel):
     """Bounded native ingestion request."""
 
@@ -261,12 +270,7 @@ class EventBatch(StrictModel):
         if len(event_ids) != len(set(event_ids)):
             raise ValueError("event_id values must be unique within a batch")
         for event in self.events:
-            count = len(event.attributes) + len(event.offloaded_attributes or {})
-            if count > MAX_EVENT_ATTRIBUTES:
-                raise ValueError(
-                    f"event {event.event_id} has {count} attributes; "
-                    f"the limit is {MAX_EVENT_ATTRIBUTES}"
-                )
+            check_ingestible(event)
         return self
 
 

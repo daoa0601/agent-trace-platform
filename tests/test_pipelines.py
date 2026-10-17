@@ -308,3 +308,46 @@ def test_normalizer_quarantines_conflicts_and_broken_references(object_store, su
     quarantine = read_parquet(object_store, normalized.manifest.tables["quarantine"])
     assert any("conflicting duplicate" in str(row["error"]) for row in quarantine)
     assert any("broken object references" in str(row["error"]) for row in quarantine)
+
+
+def test_normalizer_treats_inline_and_offloaded_attributes_as_the_same_event(
+    object_store, support_task
+) -> None:
+    event = make_valid_events(support_task)[1].model_copy(
+        update={"attributes": {"input.value": "p" * 400}}
+    )
+    # A copy written before attribute offloading existed keeps the value inline.
+    compressed = zstandard.ZstdCompressor().compress(
+        (event.model_dump_json(exclude_none=True) + "\n").encode()
+    )
+    object_store.put_bytes(
+        "raw/collection_date=2026-07-17/experiment_id=exp_test/worker_id=old/old.jsonl.zst",
+        compressed,
+    )
+    RawBatchWriter(object_store, inline_payload_bytes=256).write(
+        EventBatch(worker_id="new", events=[event])
+    )
+    normalized = normalize_raw_traces(object_store)
+    assert normalized.manifest.metrics["conflicting_event_count"] == 0
+    assert normalized.manifest.metrics["duplicate_event_count"] == 1
+
+
+def test_normalizer_still_flags_different_attribute_values(object_store, support_task) -> None:
+    events = make_valid_events(support_task)
+    RawBatchWriter(object_store).write(
+        EventBatch(worker_id="base", events=[events[0], *events[2:]])
+    )
+    event = events[1].model_copy(update={"attributes": {"input.value": "p" * 400}})
+    changed = event.model_copy(update={"attributes": {"input.value": "q" * 400}})
+    compressed = zstandard.ZstdCompressor().compress(
+        (changed.model_dump_json(exclude_none=True) + "\n").encode()
+    )
+    object_store.put_bytes(
+        "raw/collection_date=2026-07-17/experiment_id=exp_test/worker_id=old/old.jsonl.zst",
+        compressed,
+    )
+    RawBatchWriter(object_store, inline_payload_bytes=256).write(
+        EventBatch(worker_id="new", events=[event])
+    )
+    normalized = normalize_raw_traces(object_store)
+    assert normalized.manifest.metrics["conflicting_event_count"] == 1

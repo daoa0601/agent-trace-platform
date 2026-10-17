@@ -11,6 +11,7 @@ from pydantic import JsonValue
 from agenttrace.models import MAX_EVENT_ATTRIBUTES, Content, EventBatch, StepType
 from agenttrace.redaction import Redactor
 from agenttrace.storage import BlobStore, FileObjectStore, RawBatchWriter
+from agenttrace.storage.objects import ObjectInfo
 from agenttrace.storage.raw import decode_raw_batch
 
 from .conftest import make_event
@@ -178,3 +179,27 @@ def test_event_batch_rejects_events_with_too_many_attributes(support_task) -> No
     event = make_event(1, StepType.USER_INPUT, task=support_task, attributes=attributes)
     with pytest.raises(ValueError, match="attributes"):
         EventBatch(worker_id="worker-a", events=[event])
+
+
+class CountingStore(FileObjectStore):
+    def __init__(self, root) -> None:
+        super().__init__(root)
+        self.blob_puts = 0
+
+    def put_bytes(self, key: str, data: bytes, **options) -> ObjectInfo:
+        if key.startswith("blobs/"):
+            self.blob_puts += 1
+        return super().put_bytes(key, data, **options)
+
+
+def test_raw_writer_writes_a_shared_attribute_once_per_batch(tmp_path, support_task) -> None:
+    store = CountingStore(tmp_path / "objects")
+    shared = {"service.description": "s" * 300}
+    events = [
+        make_event(index, StepType.USER_INPUT, task=support_task, attributes=dict(shared))
+        for index in range(1, 6)
+    ]
+    RawBatchWriter(store, inline_payload_bytes=256).write(
+        EventBatch(worker_id="worker-a", events=events)
+    )
+    assert store.blob_puts == 1

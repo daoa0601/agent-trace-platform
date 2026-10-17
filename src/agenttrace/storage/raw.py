@@ -43,11 +43,13 @@ class RawBatchWriter:
     def write(self, batch: EventBatch) -> RawWriteResult:
         events: list[TraceEvent] = []
         total_stats = RedactionStats()
+        # OTLP copies resource attributes onto every span; write each distinct value once.
+        attribute_blobs: dict[bytes, Content] = {}
         for event in batch.events:
             cleaned_payload, stats = self.redactor.redact(event.model_dump(mode="json"))
             total_stats = total_stats.add(stats)
             cleaned = TraceEvent.model_validate(cleaned_payload)
-            events.append(self._offload_event(cleaned))
+            events.append(self._offload_event(cleaned, attribute_blobs))
 
         lines = [event.model_dump_json(exclude_none=True) for event in events]
         raw = ("\n".join(lines) + "\n").encode("utf-8")
@@ -75,7 +77,7 @@ class RawBatchWriter:
         )
 
     def _offload_attributes(
-        self, event: TraceEvent
+        self, event: TraceEvent, blobs_by_value: dict[bytes, Content]
     ) -> tuple[dict[str, JsonValue], dict[str, Content] | None]:
         """Move attribute values to blobs, largest first, until the inline rest fits the limit.
 
@@ -85,7 +87,8 @@ class RawBatchWriter:
         limit = self.inline_payload_bytes
         inline = dict(event.attributes)
         offloaded = dict(event.offloaded_attributes or {})
-        sizes = {key: len(canonical_json(value)) for key, value in inline.items()}
+        encoded = {key: canonical_json(value) for key, value in inline.items()}
+        sizes = {key: len(raw) for key, raw in encoded.items()}
         # canonical_json of the dict: braces, one '"key":value' entry each, commas between entries.
         entries = {key: len(canonical_json(key)) + 1 + size for key, size in sizes.items()}
         entry_total = sum(entries.values())
@@ -98,13 +101,20 @@ class RawBatchWriter:
                 break
             if sizes[key] < limit // 4:
                 break
-            offloaded[key] = self.blobs.put_json(inline.pop(key)).content
+            value = inline.pop(key)
+            if encoded[key] not in blobs_by_value:
+                blobs_by_value[encoded[key]] = self.blobs.put_json(value).content
+            offloaded[key] = blobs_by_value[encoded[key]]
             entry_total -= entries[key]
         return inline, offloaded or None
 
-    def _offload_event(self, event: TraceEvent) -> TraceEvent:
+    def _offload_event(
+        self, event: TraceEvent, attribute_blobs: dict[bytes, Content]
+    ) -> TraceEvent:
         updates: dict[str, object] = {}
-        updates["attributes"], updates["offloaded_attributes"] = self._offload_attributes(event)
+        updates["attributes"], updates["offloaded_attributes"] = self._offload_attributes(
+            event, attribute_blobs
+        )
         for field_name in ("input", "output"):
             content = getattr(event, field_name)
             updates[field_name] = self.blobs.maybe_offload(content, self.inline_payload_bytes)
